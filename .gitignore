@@ -1,0 +1,10 @@
+# Verilog simulation artifacts
+*.vvp
+*.vcd
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
