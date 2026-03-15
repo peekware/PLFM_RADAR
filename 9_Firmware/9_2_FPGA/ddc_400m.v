@@ -240,6 +240,16 @@ cic_decimator_4x_enhanced cic_q_inst (
 
 assign cic_valid = cic_valid_i & cic_valid_q;
 
+// ============================================================================
+// Enhanced FIR Filters with FIXED valid signal handling
+// NOTE: Wire declarations moved BEFORE CDC instances to fix forward-reference
+//       error in Icarus Verilog (was originally after CDC instantiation)
+// ============================================================================
+wire fir_in_valid_i, fir_in_valid_q;
+wire fir_valid_i, fir_valid_q;
+wire fir_i_ready, fir_q_ready;
+wire [17:0] fir_d_in_i, fir_d_in_q; 
+
 cdc_adc_to_processing #(
     .WIDTH(18),
     .STAGES(3)
@@ -267,12 +277,8 @@ cdc_adc_to_processing #(
 );
 
 // ============================================================================
-// Enhanced FIR Filters with FIXED valid signal handling
+// FIR Filter Instances
 // ============================================================================
-wire fir_in_valid_i, fir_in_valid_q;
-wire fir_valid_i, fir_valid_q;
-wire fir_i_ready, fir_q_ready;
-wire [17:0] fir_d_in_i, fir_d_in_q; 
 
 // FIR I channel
 fir_lowpass_parallel_enhanced fir_i_inst (

@@ -11,6 +11,9 @@ module radar_receiver_final (
     input wire adc_dco_n,            // Data Clock Output N (400MHz LVDS)
 	 output wire adc_pwdn,
     
+    // Chirp counter from transmitter (for frame sync and matched filter)
+    input wire [5:0] chirp_counter,
+    
     output reg [31:0] doppler_output,
     output reg doppler_valid,
     output reg [4:0] doppler_bin,
@@ -19,7 +22,7 @@ module radar_receiver_final (
 
 // ========== INTERNAL SIGNALS ==========
 wire use_long_chirp;
-wire [5:0] chirp_counter;
+// NOTE: chirp_counter is now an input port (was undriven internal wire — bug NEW-1)
 wire chirp_start;
 wire azimuth_change;
 wire elevation_change;

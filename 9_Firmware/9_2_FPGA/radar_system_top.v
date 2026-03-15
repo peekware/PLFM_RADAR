@@ -152,8 +152,8 @@ wire rx_range_valid;
 wire [15:0] rx_doppler_real;
 wire [15:0] rx_doppler_imag;
 wire rx_doppler_data_valid;
-wire rx_cfar_detection;
-wire rx_cfar_valid;
+reg rx_cfar_detection;
+reg rx_cfar_valid;
 
 // Data packing for USB
 wire [31:0] usb_range_profile;
@@ -271,6 +271,9 @@ radar_receiver_final rx_inst (
     .clk(clk_100m_buf),
     .reset_n(sys_reset_n),
     
+    // Chirp counter from transmitter (NEW-1 fix: was disconnected)
+    .chirp_counter(tx_current_chirp),
+    
     // ADC Physical Interface
     .adc_d_p(adc_d_p),
     .adc_d_n(adc_d_n),
@@ -298,22 +301,24 @@ assign rx_doppler_data_valid = rx_doppler_valid;
 // For this implementation, we'll create a simple CFAR detection simulation
 // In a real system, this would come from a CFAR module
 reg [7:0] cfar_counter;
+reg [16:0] cfar_mag;  // Approximate magnitude for threshold detection
 always @(posedge clk_100m_buf or negedge sys_reset_n) begin
     if (!sys_reset_n) begin
         cfar_counter <= 8'd0;
         rx_cfar_detection <= 1'b0;
         rx_cfar_valid <= 1'b0;
+        cfar_mag <= 17'd0;
     end else begin
         rx_cfar_valid <= 1'b0;
         
         // Simple threshold detection on doppler magnitude
         if (rx_doppler_valid) begin
             // Calculate approximate magnitude (|I| + |Q|)
-            wire [16:0] mag = (rx_doppler_real[15] ? -rx_doppler_real : rx_doppler_real) +
-                              (rx_doppler_imag[15] ? -rx_doppler_imag : rx_doppler_imag);
+            cfar_mag = (rx_doppler_real[15] ? -rx_doppler_real : rx_doppler_real) +
+                       (rx_doppler_imag[15] ? -rx_doppler_imag : rx_doppler_imag);
             
             // Threshold detection
-            if (mag > 17'd10000) begin
+            if (cfar_mag > 17'd10000) begin
                 rx_cfar_detection <= 1'b1;
                 rx_cfar_valid <= 1'b1;
                 cfar_counter <= cfar_counter + 1;

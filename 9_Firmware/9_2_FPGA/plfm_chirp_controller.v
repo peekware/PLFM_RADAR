@@ -559,21 +559,11 @@ initial begin
     short_chirp_lut[56] = 8'd253; short_chirp_lut[57] = 8'd118; short_chirp_lut[58] = 8'd  1; short_chirp_lut[59] = 8'd129; 
 end
 
-//chirp counter
-
-always @(posedge clk_100m or negedge reset_n) begin
-    if (!reset_n) begin
-        chirp_counter <= 6'd1;
-    end else begin 
-			if (chirp__toggling) begin  
-						if (chirp_counter == CHIRP_MAX) begin
-							chirp_counter <= 6'd1;
-						end else begin
-							chirp_counter <= chirp_counter + 6'd1;
-					  end
-    end
-end
-end
+// chirp_counter is driven solely by the clk_120m FSM always block (line ~683).
+// Removed redundant clk_100m driver that caused multi-driven register
+// (synthesis failure, simulation race condition).
+// The FSM internally sequences through CHIRP_MAX chirps per beam position,
+// so external new_chirp edge counting is unnecessary here.
 
 // Elevation counter
 
