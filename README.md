@@ -180,4 +180,4 @@ remain under the **MIT License** for maximum flexibility.
 - MIT license terms apply to software where not otherwise specified
 
 ### Why This Change?
-Originally, the entire project used the MIT license. The community (special thanks to [GitHub Username]!) pointed out that MIT lacks legal protections needed for physical hardware. The switch to CERN-OHL-P ensures the project is properly protected while maintaining the same permissive spirit.
+Originally, the entire project used the MIT license. The community (special thanks to gmaynez!) pointed out that MIT lacks legal protections needed for physical hardware. The switch to CERN-OHL-P ensures the project is properly protected while maintaining the same permissive spirit.
