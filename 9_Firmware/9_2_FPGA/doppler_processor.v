@@ -206,7 +206,14 @@ always @(posedge clk or negedge reset_n) begin
                 
                 if (data_valid && !frame_buffer_full) begin
                     state <= S_ACCUMULATE;
-                    write_range_bin <= 0;
+                    // Write the first sample immediately (Bug #3 fix:
+                    // previously this transition consumed data_valid
+                    // without writing to BRAM)
+                    mem_we      <= 1;
+                    mem_waddr_r <= mem_write_addr;
+                    mem_wdata_i <= range_data[15:0];
+                    mem_wdata_q <= range_data[31:16];
+                    write_range_bin <= 1;
                 end
             end
             

@@ -214,19 +214,10 @@ initial begin
     @(posedge clk);
 
     // ---- Feed input data ----
-    // The RTL FSM consumes one data_valid cycle for the S_IDLE -> S_ACCUMULATE
-    // transition without writing data.  We pre-assert data_valid with a dummy
-    // sample to trigger the transition, then stream the 2048 real samples.
+    // RTL Bug #3 is now fixed: S_IDLE -> S_ACCUMULATE writes the first
+    // sample immediately, so we simply stream all 2048 samples.
     $display("\n--- Feeding %0d input samples ---", TOTAL_INPUTS);
 
-    // Trigger S_IDLE -> S_ACCUMULATE with first real sample
-    // (RTL will see data_valid=1 but NOT write to memory on transition cycle)
-    @(posedge clk);
-    range_data <= input_mem[0];
-    data_valid <= 1;
-
-    // Now stream all 2048 samples — the first one is re-presented since the
-    // transition cycle consumed the first data_valid without writing.
     for (i = 0; i < TOTAL_INPUTS; i = i + 1) begin
         @(posedge clk);
         range_data <= input_mem[i];
