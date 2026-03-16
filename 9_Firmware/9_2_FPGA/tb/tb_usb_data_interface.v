@@ -482,27 +482,26 @@ module tb_usb_data_interface;
         // ════════════════════════════════════════════════════════
         // TEST GROUP 9: Clock divider
         // ════════════════════════════════════════════════════════
-        $display("\n--- Test Group 9: Clock Divider ---");
+        $display("\n--- Test Group 9: Clock Forwarding ---");
         apply_reset;
         // Let the system run for a few clocks to stabilize after reset
-        repeat (2) @(posedge clk);
+        repeat (2) @(posedge ft601_clk_in);
 
-        begin : clk_div_block
-            reg prev_clk_out;
-            integer toggle_count;
-            toggle_count = 0;
-            @(posedge clk); #1;
-            prev_clk_out = ft601_clk_out;
+        // After ODDR change, ft601_clk_out is a forwarded copy of
+        // ft601_clk_in (in simulation: direct assign passthrough).
+        // Verify that ft601_clk_out tracks ft601_clk_in over 20 edges.
+        begin : clk_fwd_block
+            integer match_count;
+            match_count = 0;
 
             repeat (20) begin
-                @(posedge clk); #1;
-                if (ft601_clk_out !== prev_clk_out)
-                    toggle_count = toggle_count + 1;
-                prev_clk_out = ft601_clk_out;
+                @(posedge ft601_clk_in); #1;
+                if (ft601_clk_out === 1'b1)
+                    match_count = match_count + 1;
             end
 
-            check(toggle_count === 20,
-                  "ft601_clk_out toggles every clk posedge (divide-by-2)");
+            check(match_count === 20,
+                  "ft601_clk_out follows ft601_clk_in (forwarded clock)");
         end
 
         // ════════════════════════════════════════════════════════
