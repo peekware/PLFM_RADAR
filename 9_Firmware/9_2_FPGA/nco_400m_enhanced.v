@@ -12,43 +12,62 @@ module nco_400m_enhanced (
 );
 
 // ============================================================================
-// 4-stage pipelined NCO for 400 MHz timing closure
+// 6-stage pipelined NCO for 400 MHz timing closure
 //
-// Stage 1: Phase accumulator update (DSP48E1 in P=P+C mode) + offset addition
+// Stage 1: Phase accumulator update (DSP48E1 in P=P+C mode)
 //          DSP48E1 does: P_reg <= P_reg + C_port (frequency_tuning_word)
 //          The P register output IS the phase accumulator — no CARRY4 chain.
-//          phase_with_offset = P_output + {phase_offset, 16'b0} (registered)
-// Stage 2: LUT address decode + LUT read → register abs values + quadrant
-// Stage 3: Compute negations from registered abs values → register neg values
+//          phase_accum_reg <= P_output[31:0] (fabric register captures DSP output)
+// Stage 2: Offset addition in fabric (registered)
+//          phase_with_offset <= phase_accum_reg + {phase_offset, 16'b0}
+//          Breaking DSP→CARRY4 into two registered stages eliminates the
+//          critical path (was -0.594ns WNS in Build 6)
+// Stage 3a: Register LUT address (lut_index) and quadrant from phase_with_offset
+//           Only 2 registers driven (minimal fanout, short routes)
+// Stage 3b: LUT read using registered lut_index → register abs values + quadrant
+//           Registered LUT address → combinational LUT6 read → register
+//           Eliminates the routing-dominant critical path (-0.100ns in Build 8)
+// Stage 4: Compute negations from registered abs values → register neg values
 //          (CARRY4 x4 chain has registered inputs, fits in 2.5ns easily)
-// Stage 4: Quadrant sign application → sin_out, cos_out (pure MUX, no arith)
+// Stage 5: Quadrant sign application → sin_out, cos_out (pure MUX, no arith)
 //
-// Total latency: 4 cycles from phase_valid to sin/cos output
-// Max logic levels per stage: Stage 1=DSP48E1(internal), Stage 2=2(LUT3+LUT6),
-//   Stage 3=4(CARRY4 chain), Stage 4=1(MUX)
+// Total latency: 6 cycles from phase_valid to sin/cos output
+// Max logic levels per stage: Stage 1=DSP48E1(internal), Stage 2=4(CARRY4x5),
+//   Stage 3a=1(LUT3 quadrant+index decode), Stage 3b=1(LUT6 ROM read),
+//   Stage 4=4(CARRY4 chain), Stage 5=1(MUX)
 // ============================================================================
 
 // Phase accumulator — DSP48E1 P output provides the accumulated phase
 // In simulation: behavioral reg. In synthesis: DSP48E1 P[31:0].
-reg [31:0] phase_with_offset;
+reg [31:0] phase_accum_reg;     // Stage 1 output: registered DSP48E1 P[31:0]
+reg [31:0] phase_with_offset;   // Stage 2 output: phase_accum_reg + offset
 
-// Stage 2 pipeline registers: LUT output + quadrant
+// Stage 3a pipeline registers: registered LUT address + quadrant
+reg [5:0] lut_index_pipe;
+reg [1:0] quadrant_pipe;
+
+// Stage 3b pipeline registers: LUT output + quadrant
 reg [15:0] sin_abs_reg, cos_abs_reg;
 reg [1:0] quadrant_reg;
 
-// Stage 3 pipeline registers: pre-computed negations + abs copies + quadrant
+// Stage 4 pipeline registers: pre-computed negations + abs copies + quadrant
 reg signed [15:0] sin_neg_reg, cos_neg_reg;
-reg [15:0] sin_abs_reg2, cos_abs_reg2;  // Pass-through for Stage 4 MUX
-reg [1:0] quadrant_reg2;                 // Pass-through for Stage 4 MUX
+reg [15:0] sin_abs_reg2, cos_abs_reg2;  // Pass-through for Stage 5 MUX
+reg [1:0] quadrant_reg2;                 // Pass-through for Stage 5 MUX
 
-// Valid pipeline: tracks 4-stage latency
-reg [3:0] valid_pipe;
+// Valid pipeline: tracks 6-stage latency
+reg [5:0] valid_pipe;
 
 // Use only the top 8 bits for LUT addressing (256-entry LUT equivalent)
 wire [7:0] lut_address = phase_with_offset[31:24];
 
 // Quarter-wave sine LUT (0-90 degrees only)
-reg [15:0] sin_lut [0:63]; // 64 entries for 0-90 degrees
+// Force distributed RAM (LUTRAM) — the 64x16 LUT is only 1024 bits, far too
+// small for BRAM. BRAM CLK→DOADO delay (2.454ns) + downstream negation logic
+// (1.236ns) exceeded the 2.5ns period at 400 MHz (WNS = -2.238ns). LUTRAM
+// read is combinatorial (~0.5ns through LUTs), giving the Stage 2→3 negation
+// path ~2.1ns of budget which fits comfortably.
+(* ram_style = "distributed" *) reg [15:0] sin_lut [0:63]; // 64 entries for 0-90 degrees
 
 // Initialize sine LUT
 integer lut_init_i;
@@ -78,16 +97,20 @@ initial begin
     sin_lut[60] = 16'h7F61; sin_lut[61] = 16'h7FA6; sin_lut[62] = 16'h7FD8; sin_lut[63] = 16'h7FF5;
 end
 
-// Combinational: quadrant determination and LUT index (feeds Stage 2 registers)
+// Combinational: quadrant determination and LUT index (feeds Stage 3a registers)
 wire [1:0] quadrant_w = lut_address[7:6];
 wire [5:0] lut_index = (quadrant_w[0] ^ quadrant_w[1]) ? ~lut_address[5:0] : lut_address[5:0];
 
-// Combinational LUT read (will be registered in Stage 2)
-wire [15:0] sin_abs_w = sin_lut[lut_index];
-wire [15:0] cos_abs_w = sin_lut[63 - lut_index];
+// Combinational LUT read using REGISTERED lut_index_pipe (feeds Stage 3b registers)
+// These wires are driven by lut_index_pipe (registered in Stage 3a), so the
+// combinational path is just: lut_index_pipe_reg → LUT6 (distributed RAM read)
+// This eliminates the LUT3→LUT6 two-level critical path from Build 8.
+wire [15:0] sin_abs_w = sin_lut[lut_index_pipe];
+wire [15:0] cos_abs_w = sin_lut[63 - lut_index_pipe];
 
 // ============================================================================
-// Stage 1: Phase accumulator (DSP48E1) + offset addition (fabric register)
+// Stage 1: Phase accumulator (DSP48E1) — accumulates FTW each cycle
+// Stage 2: Offset addition in fabric — breaks DSP→CARRY4 critical path
 //
 // The phase accumulator is the critical path bottleneck: a 32-bit addition
 // requires 8 CARRY4 stages in fabric (2.826 ns > 2.5 ns budget at 400 MHz).
@@ -98,23 +121,30 @@ wire [15:0] cos_abs_w = sin_lut[63 - lut_index];
 //   - The DSP48E1 48-bit ALU performs the add internally at full speed
 //   - Only P[31:0] is used (32-bit phase accumulator)
 //
-// phase_with_offset is computed in fabric: DSP48E1 P output + {phase_offset, 16'b0}
-// This is OK because both operands are registered (P is PREG output, phase_offset
-// is a stable input), and the result feeds Stage 2 LUT which is also registered.
+// Phase offset addition is split into a separate pipeline stage:
+//   Stage 1: phase_accum_reg <= P[31:0]  (just capture the DSP output)
+//   Stage 2: phase_with_offset <= phase_accum_reg + {phase_offset, 16'b0}
+// This eliminates the DSP48E1.P→CARRY4 chain critical path (-0.594ns in Build 6).
 // ============================================================================
 
 `ifdef SIMULATION
 // ---- Behavioral model for Icarus Verilog simulation ----
 // Mimics DSP48E1 accumulator: P <= P + C, with CREG=1, PREG=1
+// Stage 1: phase_accum_reg captures accumulator output
+// Stage 2: phase_with_offset adds phase offset
 reg [31:0] phase_accumulator;
 
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
         phase_accumulator <= 32'h00000000;
+        phase_accum_reg   <= 32'h00000000;
         phase_with_offset <= 32'h00000000;
     end else if (phase_valid) begin
+        // Stage 1: accumulate + capture
         phase_accumulator <= phase_accumulator + frequency_tuning_word;
-        phase_with_offset <= phase_accumulator + {phase_offset, 16'b0};
+        phase_accum_reg   <= phase_accumulator;
+        // Stage 2: offset addition (uses previous cycle's phase_accum_reg)
+        phase_with_offset <= phase_accum_reg + {phase_offset, 16'b0};
     end
 end
 
@@ -211,39 +241,59 @@ DSP48E1 #(
     .PCOUT()
 );
 
-// phase_with_offset: add phase_offset to the DSP48E1 accumulator output
-// Both operands are registered (phase_accum_p from PREG, phase_offset is stable input)
-// This fabric add feeds Stage 2 LUT which is also registered — timing is fine
+// Stage 1: Capture DSP48E1 P output into fabric register
+// Stage 2: Add phase offset to captured value
+// Split into two registered stages to break DSP48E1.P→CARRY4 critical path
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
+        phase_accum_reg   <= 32'h00000000;
         phase_with_offset <= 32'h00000000;
     end else if (phase_valid) begin
-        phase_with_offset <= phase_accum_p[31:0] + {phase_offset, 16'b0};
+        // Stage 1: just capture DSP output (no CARRY4 chain)
+        phase_accum_reg   <= phase_accum_p[31:0];
+        // Stage 2: offset add (CARRY4 chain from registered fabric→fabric, easy timing)
+        phase_with_offset <= phase_accum_reg + {phase_offset, 16'b0};
     end
 end
 
 `endif
 
 // ============================================================================
-// Stage 2: LUT read + register absolute values and quadrant
-//          Only LUT decode here — negation is deferred to Stage 3
+// Stage 3a: Register LUT address and quadrant from phase_with_offset
+//           Only 2 registers driven (lut_index_pipe + quadrant_pipe)
+//           Minimal fanout → short routes → easy timing
+// ============================================================================
+always @(posedge clk_400m or negedge reset_n) begin
+    if (!reset_n) begin
+        lut_index_pipe <= 6'b000000;
+        quadrant_pipe  <= 2'b00;
+    end else if (valid_pipe[1]) begin
+        lut_index_pipe <= lut_index;
+        quadrant_pipe  <= quadrant_w;
+    end
+end
+
+// ============================================================================
+// Stage 3b: LUT read using registered lut_index_pipe + register abs values
+//           Registered address → combinational LUT6 read → register
+//           Only 1 logic level (LUT6), trivial timing
 // ============================================================================
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
         sin_abs_reg <= 16'h0000;
         cos_abs_reg <= 16'h7FFF;
         quadrant_reg <= 2'b00;
-    end else if (valid_pipe[0]) begin
+    end else if (valid_pipe[2]) begin
         sin_abs_reg <= sin_abs_w;
         cos_abs_reg <= cos_abs_w;
-        quadrant_reg <= quadrant_w;
+        quadrant_reg <= quadrant_pipe;
     end
 end
 
 // ============================================================================
-// Stage 3: Compute negations from registered abs values
+// Stage 4: Compute negations from registered abs values
 //          CARRY4 x4 chain has registered inputs — easily fits in 2.5ns
-//          Also pass through abs values and quadrant for Stage 4
+//          Also pass through abs values and quadrant for Stage 5
 // ============================================================================
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
@@ -252,7 +302,7 @@ always @(posedge clk_400m or negedge reset_n) begin
         sin_abs_reg2 <= 16'h0000;
         cos_abs_reg2 <= 16'h7FFF;
         quadrant_reg2 <= 2'b00;
-    end else if (valid_pipe[1]) begin
+    end else if (valid_pipe[3]) begin
         sin_neg_reg <= -sin_abs_reg;
         cos_neg_reg <= -cos_abs_reg;
         sin_abs_reg2 <= sin_abs_reg;
@@ -262,14 +312,14 @@ always @(posedge clk_400m or negedge reset_n) begin
 end
 
 // ============================================================================
-// Stage 4: Quadrant sign application → final sin/cos output
-//          Uses pre-computed negated values from Stage 3 — pure MUX, no arithmetic
+// Stage 5: Quadrant sign application → final sin/cos output
+//          Uses pre-computed negated values from Stage 4 — pure MUX, no arithmetic
 // ============================================================================
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
         sin_out <= 16'h0000;
         cos_out <= 16'h7FFF;
-    end else if (valid_pipe[2]) begin
+    end else if (valid_pipe[4]) begin
         case (quadrant_reg2)
             2'b00: begin // Quadrant I: sin+, cos+
                 sin_out <= sin_abs_reg2;
@@ -292,15 +342,15 @@ always @(posedge clk_400m or negedge reset_n) begin
 end
 
 // ============================================================================
-// Valid pipeline and dds_ready (4-stage latency)
+// Valid pipeline and dds_ready (6-stage latency)
 // ============================================================================
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
-        valid_pipe <= 4'b0000;
+        valid_pipe <= 6'b000000;
         dds_ready <= 1'b0;
     end else begin
-        valid_pipe <= {valid_pipe[2:0], phase_valid};
-        dds_ready <= valid_pipe[3];
+        valid_pipe <= {valid_pipe[4:0], phase_valid};
+        dds_ready <= valid_pipe[5];
     end
 end
 

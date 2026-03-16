@@ -15,13 +15,469 @@ parameter STAGES = 5;
 parameter DECIMATION = 4;
 parameter COMB_DELAY = 1;
 
-// Accumulator width: input_width + N*log2(R) = 18 + 5*2 = 28 bits
-// (36-bit was over-provisioned; 28 bits is mathematically exact for R=4, N=5)
-localparam ACC_WIDTH = 28;
+// Accumulator width: DSP48E1 native 48-bit.
+// CIC uses modular (wrapping) arithmetic so extra MSBs are harmless.
+localparam ACC_WIDTH = 48;
 
-reg signed [ACC_WIDTH-1:0] integrator [0:STAGES-1];
-reg signed [ACC_WIDTH-1:0] comb [0:STAGES-1];
-reg signed [ACC_WIDTH-1:0] comb_delay [0:STAGES-1][0:COMB_DELAY-1];
+// Comb section operates on 28-bit (18 + 5*log2(4) = 28, exact for comb range).
+localparam COMB_WIDTH = 28;
+
+// ============================================================================
+// INTEGRATOR CHAIN — explicit DSP48E1 with PCOUT→PCIN cascade
+// ============================================================================
+// Integrator[0]: P = P + C,    C = sign_extend(data_in)  [from fabric]
+// Integrator[k]: P = P + PCIN, PCIN from integrator[k-1] [dedicated cascade]
+//
+// The PCOUT→PCIN cascade uses dedicated silicon routing between vertically
+// adjacent DSP48E1 tiles — zero fabric delay, guaranteed to meet 400+ MHz
+// on 7-series regardless of speed grade.
+//
+// Active-high reset derived from reset_n (inverted).
+// CEP (clock enable for P register) gated by data_valid.
+// ============================================================================
+
+wire reset_h = ~reset_n;  // active-high reset for DSP48E1 RSTP
+
+// Sign-extended input for integrator_0 C port (48-bit)
+wire [ACC_WIDTH-1:0] data_in_c = {{(ACC_WIDTH-18){data_in[17]}}, data_in};
+
+// DSP48E1 cascade wires
+wire [47:0] pcout_0, pcout_1, pcout_2, pcout_3;
+wire [47:0] p_out_0, p_out_1, p_out_2, p_out_3, p_out_4;
+
+`ifndef SIMULATION
+// ============================================================================
+// SYNTHESIS: Explicit DSP48E1 instances with PCOUT→PCIN cascade
+// ============================================================================
+
+// --- Integrator 0: P = P + C (accumulate sign-extended input) ---
+// OPMODE = 7'b0101100: Z=P(010), Y=C(11), X=0(00) → P = P + C
+// CREG=1: C port is registered inside DSP48E1. This eliminates the
+// fabric→DSP C-port setup timing violation (-0.415ns in Build 6).
+// The CREG adds 1 cycle of latency before data reaches the ALU.
+// CEC=data_valid gates the C register to match CEP behavior.
+DSP48E1 #(
+    .A_INPUT            ("DIRECT"),
+    .B_INPUT            ("DIRECT"),
+    .USE_DPORT          ("FALSE"),
+    .USE_MULT           ("NONE"),
+    .AUTORESET_PATDET   ("NO_RESET"),
+    .MASK               (48'h3FFFFFFFFFFF),
+    .PATTERN             (48'h000000000000),
+    .SEL_MASK           ("MASK"),
+    .SEL_PATTERN        ("PATTERN"),
+    .USE_PATTERN_DETECT ("NO_PATDET"),
+    .ACASCREG           (0),
+    .ADREG              (0),
+    .ALUMODEREG         (0),
+    .AREG               (0),
+    .BCASCREG           (0),
+    .BREG               (0),
+    .CARRYINREG         (0),
+    .CARRYINSELREG      (0),
+    .CREG               (1),       // C port registered inside DSP — eliminates fabric→DSP setup path
+    .DREG               (0),
+    .INMODEREG          (0),
+    .MREG               (0),
+    .OPMODEREG          (0),
+    .PREG               (1)        // P register enabled (accumulator)
+) integrator_0_dsp (
+    .CLK                (clk),
+    .A                  (30'd0),
+    .B                  (18'd0),
+    .C                  (data_in_c),
+    .D                  (25'd0),
+    .CARRYIN            (1'b0),
+    .CARRYINSEL         (3'b000),
+    .OPMODE             (7'b0101100),  // P = P + C
+    .ALUMODE            (4'b0000),     // Z + (X + Y + CIN)
+    .INMODE             (5'b00000),
+    .CEA1               (1'b0),
+    .CEA2               (1'b0),
+    .CEB1               (1'b0),
+    .CEB2               (1'b0),
+    .CEC                (data_valid),  // Register C when data is valid (CREG=1)
+    .CED                (1'b0),
+    .CEM                (1'b0),
+    .CEP                (data_valid),  // Accumulate only when data is valid
+    .CEAD               (1'b0),
+    .CEALUMODE          (1'b0),
+    .CECTRL             (1'b0),
+    .CECARRYIN          (1'b0),
+    .CEINMODE           (1'b0),
+    .RSTP               (reset_h),
+    .RSTA               (1'b0),
+    .RSTB               (1'b0),
+    .RSTC               (reset_h),     // Reset C register (CREG=1) on reset
+    .RSTD               (1'b0),
+    .RSTM               (1'b0),
+    .RSTALLCARRYIN      (1'b0),
+    .RSTALUMODE         (1'b0),
+    .RSTCTRL            (1'b0),
+    .RSTINMODE          (1'b0),
+    .P                  (p_out_0),
+    .PCOUT              (pcout_0),
+    .ACOUT              (),
+    .BCOUT              (),
+    .CARRYCASCOUT       (),
+    .CARRYOUT           (),
+    .MULTSIGNOUT        (),
+    .OVERFLOW           (),
+    .PATTERNBDETECT     (),
+    .PATTERNDETECT      (),
+    .UNDERFLOW          ()
+);
+
+// --- Integrator 1: P = P + PCIN (cascade from integrator_0) ---
+// OPMODE = 7'b0010010: Z=PCIN(001), Y=0(00), X=P(10) → P = P + PCIN
+DSP48E1 #(
+    .A_INPUT            ("DIRECT"),
+    .B_INPUT            ("DIRECT"),
+    .USE_DPORT          ("FALSE"),
+    .USE_MULT           ("NONE"),
+    .AUTORESET_PATDET   ("NO_RESET"),
+    .MASK               (48'h3FFFFFFFFFFF),
+    .PATTERN             (48'h000000000000),
+    .SEL_MASK           ("MASK"),
+    .SEL_PATTERN        ("PATTERN"),
+    .USE_PATTERN_DETECT ("NO_PATDET"),
+    .ACASCREG           (0),
+    .ADREG              (0),
+    .ALUMODEREG         (0),
+    .AREG               (0),
+    .BCASCREG           (0),
+    .BREG               (0),
+    .CARRYINREG         (0),
+    .CARRYINSELREG      (0),
+    .CREG               (0),
+    .DREG               (0),
+    .INMODEREG          (0),
+    .MREG               (0),
+    .OPMODEREG          (0),
+    .PREG               (1)
+) integrator_1_dsp (
+    .CLK                (clk),
+    .A                  (30'd0),
+    .B                  (18'd0),
+    .C                  (48'd0),
+    .D                  (25'd0),
+    .PCIN               (pcout_0),
+    .CARRYIN            (1'b0),
+    .CARRYINSEL         (3'b000),
+    .OPMODE             (7'b0010010),  // P = P + PCIN
+    .ALUMODE            (4'b0000),
+    .INMODE             (5'b00000),
+    .CEA1               (1'b0),
+    .CEA2               (1'b0),
+    .CEB1               (1'b0),
+    .CEB2               (1'b0),
+    .CEC                (1'b0),
+    .CED                (1'b0),
+    .CEM                (1'b0),
+    .CEP                (data_valid),
+    .CEAD               (1'b0),
+    .CEALUMODE          (1'b0),
+    .CECTRL             (1'b0),
+    .CECARRYIN          (1'b0),
+    .CEINMODE           (1'b0),
+    .RSTP               (reset_h),
+    .RSTA               (1'b0),
+    .RSTB               (1'b0),
+    .RSTC               (1'b0),
+    .RSTD               (1'b0),
+    .RSTM               (1'b0),
+    .RSTALLCARRYIN      (1'b0),
+    .RSTALUMODE         (1'b0),
+    .RSTCTRL            (1'b0),
+    .RSTINMODE          (1'b0),
+    .P                  (p_out_1),
+    .PCOUT              (pcout_1),
+    .ACOUT              (),
+    .BCOUT              (),
+    .CARRYCASCOUT       (),
+    .CARRYOUT           (),
+    .MULTSIGNOUT        (),
+    .OVERFLOW           (),
+    .PATTERNBDETECT     (),
+    .PATTERNDETECT      (),
+    .UNDERFLOW          ()
+);
+
+// --- Integrator 2: P = P + PCIN (cascade from integrator_1) ---
+DSP48E1 #(
+    .A_INPUT            ("DIRECT"),
+    .B_INPUT            ("DIRECT"),
+    .USE_DPORT          ("FALSE"),
+    .USE_MULT           ("NONE"),
+    .AUTORESET_PATDET   ("NO_RESET"),
+    .MASK               (48'h3FFFFFFFFFFF),
+    .PATTERN             (48'h000000000000),
+    .SEL_MASK           ("MASK"),
+    .SEL_PATTERN        ("PATTERN"),
+    .USE_PATTERN_DETECT ("NO_PATDET"),
+    .ACASCREG           (0),
+    .ADREG              (0),
+    .ALUMODEREG         (0),
+    .AREG               (0),
+    .BCASCREG           (0),
+    .BREG               (0),
+    .CARRYINREG         (0),
+    .CARRYINSELREG      (0),
+    .CREG               (0),
+    .DREG               (0),
+    .INMODEREG          (0),
+    .MREG               (0),
+    .OPMODEREG          (0),
+    .PREG               (1)
+) integrator_2_dsp (
+    .CLK                (clk),
+    .A                  (30'd0),
+    .B                  (18'd0),
+    .C                  (48'd0),
+    .D                  (25'd0),
+    .PCIN               (pcout_1),
+    .CARRYIN            (1'b0),
+    .CARRYINSEL         (3'b000),
+    .OPMODE             (7'b0010010),  // P = P + PCIN
+    .ALUMODE            (4'b0000),
+    .INMODE             (5'b00000),
+    .CEA1               (1'b0),
+    .CEA2               (1'b0),
+    .CEB1               (1'b0),
+    .CEB2               (1'b0),
+    .CEC                (1'b0),
+    .CED                (1'b0),
+    .CEM                (1'b0),
+    .CEP                (data_valid),
+    .CEAD               (1'b0),
+    .CEALUMODE          (1'b0),
+    .CECTRL             (1'b0),
+    .CECARRYIN          (1'b0),
+    .CEINMODE           (1'b0),
+    .RSTP               (reset_h),
+    .RSTA               (1'b0),
+    .RSTB               (1'b0),
+    .RSTC               (1'b0),
+    .RSTD               (1'b0),
+    .RSTM               (1'b0),
+    .RSTALLCARRYIN      (1'b0),
+    .RSTALUMODE         (1'b0),
+    .RSTCTRL            (1'b0),
+    .RSTINMODE          (1'b0),
+    .P                  (p_out_2),
+    .PCOUT              (pcout_2),
+    .ACOUT              (),
+    .BCOUT              (),
+    .CARRYCASCOUT       (),
+    .CARRYOUT           (),
+    .MULTSIGNOUT        (),
+    .OVERFLOW           (),
+    .PATTERNBDETECT     (),
+    .PATTERNDETECT      (),
+    .UNDERFLOW          ()
+);
+
+// --- Integrator 3: P = P + PCIN (cascade from integrator_2) ---
+DSP48E1 #(
+    .A_INPUT            ("DIRECT"),
+    .B_INPUT            ("DIRECT"),
+    .USE_DPORT          ("FALSE"),
+    .USE_MULT           ("NONE"),
+    .AUTORESET_PATDET   ("NO_RESET"),
+    .MASK               (48'h3FFFFFFFFFFF),
+    .PATTERN             (48'h000000000000),
+    .SEL_MASK           ("MASK"),
+    .SEL_PATTERN        ("PATTERN"),
+    .USE_PATTERN_DETECT ("NO_PATDET"),
+    .ACASCREG           (0),
+    .ADREG              (0),
+    .ALUMODEREG         (0),
+    .AREG               (0),
+    .BCASCREG           (0),
+    .BREG               (0),
+    .CARRYINREG         (0),
+    .CARRYINSELREG      (0),
+    .CREG               (0),
+    .DREG               (0),
+    .INMODEREG          (0),
+    .MREG               (0),
+    .OPMODEREG          (0),
+    .PREG               (1)
+) integrator_3_dsp (
+    .CLK                (clk),
+    .A                  (30'd0),
+    .B                  (18'd0),
+    .C                  (48'd0),
+    .D                  (25'd0),
+    .PCIN               (pcout_2),
+    .CARRYIN            (1'b0),
+    .CARRYINSEL         (3'b000),
+    .OPMODE             (7'b0010010),  // P = P + PCIN
+    .ALUMODE            (4'b0000),
+    .INMODE             (5'b00000),
+    .CEA1               (1'b0),
+    .CEA2               (1'b0),
+    .CEB1               (1'b0),
+    .CEB2               (1'b0),
+    .CEC                (1'b0),
+    .CED                (1'b0),
+    .CEM                (1'b0),
+    .CEP                (data_valid),
+    .CEAD               (1'b0),
+    .CEALUMODE          (1'b0),
+    .CECTRL             (1'b0),
+    .CECARRYIN          (1'b0),
+    .CEINMODE           (1'b0),
+    .RSTP               (reset_h),
+    .RSTA               (1'b0),
+    .RSTB               (1'b0),
+    .RSTC               (1'b0),
+    .RSTD               (1'b0),
+    .RSTM               (1'b0),
+    .RSTALLCARRYIN      (1'b0),
+    .RSTALUMODE         (1'b0),
+    .RSTCTRL            (1'b0),
+    .RSTINMODE          (1'b0),
+    .P                  (p_out_3),
+    .PCOUT              (pcout_3),
+    .ACOUT              (),
+    .BCOUT              (),
+    .CARRYCASCOUT       (),
+    .CARRYOUT           (),
+    .MULTSIGNOUT        (),
+    .OVERFLOW           (),
+    .PATTERNBDETECT     (),
+    .PATTERNDETECT      (),
+    .UNDERFLOW          ()
+);
+
+// --- Integrator 4: P = P + PCIN (cascade from integrator_3) ---
+// No PCOUT needed (last stage in cascade)
+DSP48E1 #(
+    .A_INPUT            ("DIRECT"),
+    .B_INPUT            ("DIRECT"),
+    .USE_DPORT          ("FALSE"),
+    .USE_MULT           ("NONE"),
+    .AUTORESET_PATDET   ("NO_RESET"),
+    .MASK               (48'h3FFFFFFFFFFF),
+    .PATTERN             (48'h000000000000),
+    .SEL_MASK           ("MASK"),
+    .SEL_PATTERN        ("PATTERN"),
+    .USE_PATTERN_DETECT ("NO_PATDET"),
+    .ACASCREG           (0),
+    .ADREG              (0),
+    .ALUMODEREG         (0),
+    .AREG               (0),
+    .BCASCREG           (0),
+    .BREG               (0),
+    .CARRYINREG         (0),
+    .CARRYINSELREG      (0),
+    .CREG               (0),
+    .DREG               (0),
+    .INMODEREG          (0),
+    .MREG               (0),
+    .OPMODEREG          (0),
+    .PREG               (1)
+) integrator_4_dsp (
+    .CLK                (clk),
+    .A                  (30'd0),
+    .B                  (18'd0),
+    .C                  (48'd0),
+    .D                  (25'd0),
+    .PCIN               (pcout_3),
+    .CARRYIN            (1'b0),
+    .CARRYINSEL         (3'b000),
+    .OPMODE             (7'b0010010),  // P = P + PCIN
+    .ALUMODE            (4'b0000),
+    .INMODE             (5'b00000),
+    .CEA1               (1'b0),
+    .CEA2               (1'b0),
+    .CEB1               (1'b0),
+    .CEB2               (1'b0),
+    .CEC                (1'b0),
+    .CED                (1'b0),
+    .CEM                (1'b0),
+    .CEP                (data_valid),
+    .CEAD               (1'b0),
+    .CEALUMODE          (1'b0),
+    .CECTRL             (1'b0),
+    .CECARRYIN          (1'b0),
+    .CEINMODE           (1'b0),
+    .RSTP               (reset_h),
+    .RSTA               (1'b0),
+    .RSTB               (1'b0),
+    .RSTC               (1'b0),
+    .RSTD               (1'b0),
+    .RSTM               (1'b0),
+    .RSTALLCARRYIN      (1'b0),
+    .RSTALUMODE         (1'b0),
+    .RSTCTRL            (1'b0),
+    .RSTINMODE          (1'b0),
+    .P                  (p_out_4),
+    .PCOUT              (),
+    .ACOUT              (),
+    .BCOUT              (),
+    .CARRYCASCOUT       (),
+    .CARRYOUT           (),
+    .MULTSIGNOUT        (),
+    .OVERFLOW           (),
+    .PATTERNBDETECT     (),
+    .PATTERNDETECT      (),
+    .UNDERFLOW          ()
+);
+
+`else
+// ============================================================================
+// SIMULATION: Behavioral model (Icarus Verilog compatible)
+// ============================================================================
+// Functionally identical: each integrator is P <= P + input, gated by data_valid.
+// integrator_0 adds sign-extended data_in; stages 1-4 add previous stage output.
+//
+// CREG=1 on integrator_0: The C-port register adds 1 cycle of latency.
+// data_in_c_delayed models this: on cycle N with data_valid, the DSP's C register
+// captures data_in_c(N), but the ALU uses the PREVIOUS C register value.
+// So sim_int_0 accumulates data_in_c_delayed (1 cycle behind data_in_c).
+// ============================================================================
+reg signed [ACC_WIDTH-1:0] sim_int_0, sim_int_1, sim_int_2, sim_int_3, sim_int_4;
+reg signed [ACC_WIDTH-1:0] data_in_c_delayed;  // Models CREG=1 on integrator_0
+
+always @(posedge clk) begin
+    if (reset_h) begin
+        sim_int_0 <= 0;
+        sim_int_1 <= 0;
+        sim_int_2 <= 0;
+        sim_int_3 <= 0;
+        sim_int_4 <= 0;
+        data_in_c_delayed <= 0;
+    end else if (data_valid) begin
+        // CREG pipeline: capture current data, use previous
+        data_in_c_delayed <= $signed(data_in_c);
+        sim_int_0 <= sim_int_0 + data_in_c_delayed;
+        sim_int_1 <= sim_int_1 + sim_int_0;
+        sim_int_2 <= sim_int_2 + sim_int_1;
+        sim_int_3 <= sim_int_3 + sim_int_2;
+        sim_int_4 <= sim_int_4 + sim_int_3;
+    end
+end
+
+assign p_out_0 = sim_int_0;
+assign p_out_1 = sim_int_1;
+assign p_out_2 = sim_int_2;
+assign p_out_3 = sim_int_3;
+assign p_out_4 = sim_int_4;
+// pcout wires unused in simulation
+assign pcout_0 = sim_int_0;
+assign pcout_1 = sim_int_1;
+assign pcout_2 = sim_int_2;
+assign pcout_3 = sim_int_3;
+`endif
+
+// ============================================================================
+// CONTROL AND MONITORING (fabric logic)
+// ============================================================================
+reg signed [COMB_WIDTH-1:0] integrator_sampled;
+reg signed [COMB_WIDTH-1:0] comb [0:STAGES-1];
+reg signed [COMB_WIDTH-1:0] comb_delay [0:STAGES-1][0:COMB_DELAY-1];
 
 // Enhanced control and monitoring
 reg [1:0] decimation_counter;
@@ -30,39 +486,39 @@ reg data_valid_comb;
 reg [7:0] output_counter;
 reg [ACC_WIDTH-1:0] max_integrator_value;
 reg overflow_detected;
-reg overflow_latched;  // Latched overflow indicator
+reg overflow_latched;
 
 // Diagnostic registers
 reg [7:0] saturation_event_count;
 reg [31:0] sample_count;
 
-// Comb-stage saturation flags (separate from integrator block to avoid multi-driven nets)
+// Comb-stage saturation flags
 reg comb_overflow_latched;
 reg comb_saturation_detected;
 reg [7:0] comb_saturation_event_count;
 
 // Temporary signals for calculations
 reg signed [ACC_WIDTH-1:0] abs_integrator_value;
-reg signed [ACC_WIDTH-1:0] temp_scaled_output;
-reg signed [17:0] temp_output;  // Temporary output for proper range checking
+reg signed [COMB_WIDTH-1:0] temp_scaled_output;
+reg signed [17:0] temp_output;
 
-// Pipeline stage for saturation comparison — breaks CARRY4 chain from timing path
-reg sat_pos;            // temp_scaled_output > 131071 (registered)
-reg sat_neg;            // temp_scaled_output < -131072 (registered)
-reg signed [17:0] temp_output_pipe;  // Registered passthrough value
-reg data_out_valid_pipe; // Delayed valid for pipelined output
+// Pipeline stage for saturation comparison
+reg sat_pos;
+reg sat_neg;
+reg signed [17:0] temp_output_pipe;
+reg data_out_valid_pipe;
 
 integer i, j;
 
 // Initialize
 initial begin
     for (i = 0; i < STAGES; i = i + 1) begin
-        integrator[i] = 0;
         comb[i] = 0;
         for (j = 0; j < COMB_DELAY; j = j + 1) begin
             comb_delay[i][j] = 0;
         end
     end
+    integrator_sampled = 0;
     decimation_counter = 0;
     data_valid_delayed = 0;
     data_valid_comb = 0;
@@ -88,12 +544,10 @@ initial begin
     comb_saturation_event_count = 0;
 end
 
-// Enhanced integrator section with proper saturation monitoring
+// Decimation control + monitoring (integrators are now DSP48E1 instances)
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
-        for (i = 0; i < STAGES; i = i + 1) begin
-            integrator[i] <= 0;
-        end
+        integrator_sampled <= 0;
         decimation_counter <= 0;
         data_valid_delayed <= 0;
         max_integrator_value <= 0;
@@ -106,8 +560,7 @@ always @(posedge clk or negedge reset_n) begin
         max_value_monitor <= 0;
         output_counter <= 0;
     end else begin
-        // Monitor control - clear latched saturation on reset_monitors
-        // (must be inside else branch so Vivado sees a clean async-reset FF template)
+        // Monitor control
         if (reset_monitors) begin
             overflow_latched <= 0;
             saturation_detected <= 0;
@@ -118,38 +571,29 @@ always @(posedge clk or negedge reset_n) begin
 
         if (data_valid) begin
             sample_count <= sample_count + 1;
-            
-            // Integrator stages — standard CIC uses wrapping (modular) arithmetic.
-            // Saturation clamping is removed because CIC math relies on wrap-around;
-            // the comb stages difference successive integrator values, canceling wraps.
-            integrator[0] <= integrator[0] + {{(ACC_WIDTH-18){data_in[17]}}, data_in};
-            
-            // Calculate absolute value for monitoring
-            abs_integrator_value <= (integrator[0][ACC_WIDTH-1]) ? -integrator[0] : integrator[0];
-            
-            // Track maximum integrator value for gain monitoring (absolute value)
+
+            // Monitor integrator_0 magnitude (read DSP P output)
+            abs_integrator_value <= (p_out_0[ACC_WIDTH-1]) ? -$signed(p_out_0) : $signed(p_out_0);
+
             if (abs_integrator_value > max_integrator_value) begin
                 max_integrator_value <= abs_integrator_value;
-                max_value_monitor <= abs_integrator_value[ACC_WIDTH-5:ACC_WIDTH-12];
+                max_value_monitor <= abs_integrator_value[27:20];
             end
-            
-            // Remaining integrator stages — pure accumulation, no saturation
-            for (i = 1; i < STAGES; i = i + 1) begin
-                integrator[i] <= integrator[i] + integrator[i-1];
-            end
-            
-            // Enhanced decimation control
+
+            // Decimation control
             if (decimation_counter == DECIMATION - 1) begin
                 decimation_counter <= 0;
                 data_valid_delayed <= 1;
                 output_counter <= output_counter + 1;
+                // Capture integrator_4 output, truncate to comb width
+                integrator_sampled <= p_out_4[COMB_WIDTH-1:0];
             end else begin
                 decimation_counter <= decimation_counter + 1;
                 data_valid_delayed <= 0;
             end
         end else begin
             data_valid_delayed <= 0;
-            overflow_detected <= 1'b0;  // Clear immediate detection when no data
+            overflow_detected <= 1'b0;
         end
     end
 end
@@ -163,7 +607,7 @@ always @(posedge clk or negedge reset_n) begin
     end
 end
 
-// Enhanced comb section with FIXED scaling and saturation monitoring
+// Enhanced comb section with scaling and saturation monitoring
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
         for (i = 0; i < STAGES; i = i + 1) begin
@@ -184,8 +628,6 @@ always @(posedge clk or negedge reset_n) begin
         comb_saturation_detected <= 0;
         comb_saturation_event_count <= 0;
     end else begin
-        // Monitor control - clear latched comb saturation on reset_monitors
-        // (inside else branch so Vivado sees clean async-reset FF template)
         if (reset_monitors) begin
             comb_overflow_latched <= 0;
             comb_saturation_detected <= 0;
@@ -193,37 +635,27 @@ always @(posedge clk or negedge reset_n) begin
         end
 
         if (data_valid_comb) begin
-            // Comb processing — raw subtraction only (no saturation check needed;
-            // comb is a differencing stage, cannot overflow if integrators are bounded)
             for (i = 0; i < STAGES; i = i + 1) begin
                 if (i == 0) begin
-                    comb[0] <= integrator[STAGES-1] - comb_delay[0][COMB_DELAY-1];
-                    
-                    // Update delay line for first stage
+                    comb[0] <= integrator_sampled - comb_delay[0][COMB_DELAY-1];
                     for (j = COMB_DELAY-1; j > 0; j = j - 1) begin
                         comb_delay[0][j] <= comb_delay[0][j-1];
                     end
-                    comb_delay[0][0] <= integrator[STAGES-1];
+                    comb_delay[0][0] <= integrator_sampled;
                 end else begin
                     comb[i] <= comb[i-1] - comb_delay[i][COMB_DELAY-1];
-                    
-                    // Update delay line
                     for (j = COMB_DELAY-1; j > 0; j = j - 1) begin
                         comb_delay[i][j] <= comb_delay[i][j-1];
                     end
                     comb_delay[i][0] <= comb[i-1];
                 end
             end
-            
-            // FIXED: Use proper scaling for 5 stages and decimation by 4
-            // Gain = (4^5) = 1024 = 2^10, so scale by 2^10 to normalize
+
+            // Gain = (4^5) = 1024 = 2^10, scale by 2^10 to normalize
             temp_scaled_output <= comb[STAGES-1] >>> 10;
-            
-            // FIXED: Extract 18-bit output properly
             temp_output <= temp_scaled_output[17:0];
-            
+
             // Pipeline Stage 2: Register saturation comparison flags
-            // This breaks the CARRY4 chain out of the data_out critical path
             sat_pos <= (temp_scaled_output > 131071);
             sat_neg <= (temp_scaled_output < -131072);
             temp_output_pipe <= temp_scaled_output[17:0];
@@ -231,7 +663,7 @@ always @(posedge clk or negedge reset_n) begin
         end else begin
             data_out_valid_pipe <= 0;
         end
-        
+
         // Pipeline Stage 3: MUX from registered comparison flags
         if (data_out_valid_pipe) begin
             if (sat_pos) begin
@@ -255,7 +687,7 @@ always @(posedge clk or negedge reset_n) begin
                 comb_overflow_latched <= 1'b0;
                 comb_saturation_detected <= 1'b0;
             end
-            
+
             data_out_valid <= 1;
         end else begin
             data_out_valid <= 0;
@@ -263,7 +695,7 @@ always @(posedge clk or negedge reset_n) begin
     end
 end
 
-// Continuous monitoring of saturation status
+// Continuous monitoring
 `ifdef SIMULATION
 always @(posedge clk) begin
     if (overflow_detected && sample_count < 100) begin
@@ -271,8 +703,5 @@ always @(posedge clk) begin
     end
 end
 `endif
-
-// Clear saturation on external reset — handled in integrator always block
-// (lines 165-172, using synchronous check of reset_monitors)
 
 endmodule
