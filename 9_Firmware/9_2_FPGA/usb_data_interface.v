@@ -31,7 +31,7 @@ module usb_data_interface (
     input wire [1:0] ft601_swb,       // Selected write buffer
     
     // Clock
-    output reg ft601_clk_out,         // Output clock to FT601 (optional)
+    output wire ft601_clk_out,        // Output clock to FT601 (forwarded via ODDR)
     input wire ft601_clk_in           // Clock from FT601 (60/100MHz)
 );
 
@@ -223,13 +223,39 @@ always @(posedge ft601_clk_in or negedge reset_n) begin
     end
 end
 
-// Generate clock for FT601 if needed (optional)
-always @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
-        ft601_clk_out <= 0;
-    end else begin
-        ft601_clk_out <= ~ft601_clk_out;  // Divide by 2 from main clock
-    end
+// ============================================================================
+// FT601 clock output forwarding
+// ============================================================================
+// Forward ft601_clk_in back out via ODDR so that the forwarded clock at the
+// pin has the same insertion delay as the data outputs (both go through the
+// same BUFG). This makes the output delay analysis relative to the generated
+// clock at the pin, where insertion delays cancel.
+
+`ifndef SIMULATION
+ODDR #(
+    .DDR_CLK_EDGE("OPPOSITE_EDGE"),
+    .INIT(1'b0),
+    .SRTYPE("SYNC")
+) oddr_ft601_clk (
+    .Q(ft601_clk_out),
+    .C(ft601_clk_in),
+    .CE(1'b1),
+    .D1(1'b1),
+    .D2(1'b0),
+    .R(1'b0),
+    .S(1'b0)
+);
+`else
+// Simulation: behavioral clock forwarding
+reg ft601_clk_out_sim;
+always @(posedge ft601_clk_in or negedge reset_n) begin
+    if (!reset_n)
+        ft601_clk_out_sim <= 1'b0;
+    else
+        ft601_clk_out_sim <= 1'b1;
 end
+// In simulation, just pass the clock through
+assign ft601_clk_out = ft601_clk_in;
+`endif
 
 endmodule

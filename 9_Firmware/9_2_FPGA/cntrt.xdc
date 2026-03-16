@@ -1,307 +1,260 @@
 # ============================================================================
 # RADAR SYSTEM FPGA CONSTRAINTS
 # ============================================================================
-# Device: [XC7A100T]
-# Created: [DATE]
-# Description: Main constraints file for radar system with FT601 USB 3.0
+# Device: XC7A50T-2FTG256I (FTG256 package)
+# Board:  AERIS-10 Phased Array Radar — Main Board
+# Source: Pin assignments extracted from Eagle schematic (RADAR_Main_Board.sch)
+#         FPGA = U42
+#
+# NOTE: The README and prior version of this file incorrectly referenced
+#       XC7A100TCSG324-1. The physical board uses XC7A50T in a 256-ball BGA
+#       (FTG256). All PACKAGE_PIN values below are FTG256 ball locations.
+#
+# I/O Bank Voltage Summary:
+#   Bank 0:  VCCO = 3.3V (JTAG, flash CS)
+#   Bank 14: VCCO = 3.3V (ADC LVDS data, SPI flash)
+#   Bank 15: VCCO = 3.3V (DAC, clocks, STM32 SPI 3.3V side, DIG bus, mixer)
+#   Bank 34: VCCO = 1.8V (ADAR1000 beamformer control, SPI 1.8V side)
+#   Bank 35: VCCO = 3.3V (unused — no signal connections)
 # ============================================================================
 
 # ============================================================================
 # CLOCK CONSTRAINTS
 # ============================================================================
 
-# 100MHz System Clock
+# 100MHz System Clock (AD9523 OUT6 → FPGA_SYS_CLOCK → Bank 15 MRCC pin E12)
+set_property PACKAGE_PIN E12 [get_ports {clk_100m}]
+set_property IOSTANDARD LVCMOS33 [get_ports {clk_100m}]
 create_clock -name clk_100m -period 10.0 [get_ports {clk_100m}]
 set_input_jitter [get_clocks clk_100m] 0.1
 
-# 120MHz DAC Clock
+# 120MHz DAC Clock (AD9523 OUT11 → FPGA_DAC_CLOCK → Bank 15 MRCC pin C13)
+# NOTE: The physical DAC (U3, AD9708) receives its clock directly from the
+#       AD9523 via a separate net (DAC_CLOCK), NOT from the FPGA. The FPGA
+#       uses this clock input for internal DAC data timing only. The RTL port
+#       `dac_clk` is an output that assigns clk_120m directly — it has no
+#       separate physical pin on this board and should be removed from the
+#       RTL or left unconnected.
+set_property PACKAGE_PIN C13 [get_ports {clk_120m_dac}]
+set_property IOSTANDARD LVCMOS33 [get_ports {clk_120m_dac}]
 create_clock -name clk_120m_dac -period 8.333 [get_ports {clk_120m_dac}]
 set_input_jitter [get_clocks clk_120m_dac] 0.1
 
-# FT601 Clock (100MHz from FT601)
-create_clock -name ft601_clk_in -period 10.0 [get_ports {ft601_clk_in}]
-set_input_jitter [get_clocks ft601_clk_in] 0.1
-
-# ADC DCO Clock (400MHz LVDS)
+# ADC DCO Clock (400MHz LVDS — AD9523 OUT5 → AD9484 → FPGA, Bank 14 MRCC)
+set_property PACKAGE_PIN N14 [get_ports {adc_dco_p}]
+set_property PACKAGE_PIN P14 [get_ports {adc_dco_n}]
+set_property IOSTANDARD LVDS_33 [get_ports {adc_dco_p}]
+set_property IOSTANDARD LVDS_33 [get_ports {adc_dco_n}]
+set_property DIFF_TERM TRUE [get_ports {adc_dco_p}]
 create_clock -name adc_dco_p -period 2.5 [get_ports {adc_dco_p}]
 set_input_jitter [get_clocks adc_dco_p] 0.05
 
-# ============================================================================
-# RESET CONSTRAINTS
-# ============================================================================
+# --------------------------------------------------------------------------
+# FT601 Clock — COMMENTED OUT: FT601 (U6) is placed in schematic but has
+# zero net connections. No physical clock pin exists on this board.
+# --------------------------------------------------------------------------
+# create_clock -name ft601_clk_in -period 10.0 [get_ports {ft601_clk_in}]
+# set_input_jitter [get_clocks ft601_clk_in] 0.1
 
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {reset_n}]
+# ============================================================================
+# RESET (Active-Low)
+# ============================================================================
+# DIG_4 (STM32 PD12 → FPGA Bank 15 pin E15)
+# STM32 firmware uses HAL_GPIO_WritePin to assert/deassert FPGA reset.
+
+set_property PACKAGE_PIN E15 [get_ports {reset_n}]
 set_property IOSTANDARD LVCMOS33 [get_ports {reset_n}]
 set_property PULLUP true [get_ports {reset_n}]
 
 # ============================================================================
-# TRANSMITTER INTERFACE (DAC)
+# TRANSMITTER INTERFACE (DAC — Bank 15, VCCO=3.3V)
 # ============================================================================
 
-# DAC Data Bus (8-bit)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[6]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_data[7]}]
+# DAC Data Bus (8-bit) — AD9708 data inputs via schematic nets DAC_0..DAC_7
+set_property PACKAGE_PIN A14 [get_ports {dac_data[0]}]
+set_property PACKAGE_PIN A13 [get_ports {dac_data[1]}]
+set_property PACKAGE_PIN A12 [get_ports {dac_data[2]}]
+set_property PACKAGE_PIN B11 [get_ports {dac_data[3]}]
+set_property PACKAGE_PIN B10 [get_ports {dac_data[4]}]
+set_property PACKAGE_PIN A10 [get_ports {dac_data[5]}]
+set_property PACKAGE_PIN A9  [get_ports {dac_data[6]}]
+set_property PACKAGE_PIN A8  [get_ports {dac_data[7]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {dac_data[*]}]
 set_property SLEW FAST [get_ports {dac_data[*]}]
 set_property DRIVE 8 [get_ports {dac_data[*]}]
 
-# DAC Control
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_clk}]
-set_property IOSTANDARD LVCMOS33 [get_ports {dac_clk}]
-set_property SLEW FAST [get_ports {dac_clk}]
+# DAC Clock Output — NOT DIRECTLY WIRED TO DAC IN SCHEMATIC
+# The DAC chip (U3) receives its clock from AD9523 via a separate net
+# (DAC_CLOCK), not from the FPGA. The RTL `dac_clk` output has no
+# physical pin. Comment out or remove from RTL.
+# set_property PACKAGE_PIN ??? [get_ports {dac_clk}]
+# set_property IOSTANDARD LVCMOS33 [get_ports {dac_clk}]
+# set_property SLEW FAST [get_ports {dac_clk}]
 
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dac_sleep}]
+# DAC Sleep Control — DAC_SLEEP net
+set_property PACKAGE_PIN A15 [get_ports {dac_sleep}]
 set_property IOSTANDARD LVCMOS33 [get_ports {dac_sleep}]
 
-# RF Switch Control
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {fpga_rf_switch}]
+# RF Switch Control — M3S_VCTRL net
+set_property PACKAGE_PIN G15 [get_ports {fpga_rf_switch}]
 set_property IOSTANDARD LVCMOS33 [get_ports {fpga_rf_switch}]
 
-# Mixer Enables
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {rx_mixer_en}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {tx_mixer_en}]
+# Mixer Enables — MIX_RX_EN, MIX_TX_EN nets
+set_property PACKAGE_PIN D11 [get_ports {rx_mixer_en}]
+set_property PACKAGE_PIN C11 [get_ports {tx_mixer_en}]
 set_property IOSTANDARD LVCMOS33 [get_ports {rx_mixer_en}]
 set_property IOSTANDARD LVCMOS33 [get_ports {tx_mixer_en}]
 
 # ============================================================================
-# ADAR1000 BEAMFORMER CONTROL
+# ADAR1000 BEAMFORMER CONTROL (Bank 34, VCCO=1.8V)
 # ============================================================================
 
-# ADAR1000 Load/Control Pins (Channel 1-4)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tx_load_1}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_rx_load_1}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tx_load_2}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_rx_load_2}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tx_load_3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_rx_load_3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tx_load_4}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_rx_load_4}]
-set_property IOSTANDARD LVCMOS33 [get_ports {adar_*_load_*}]
+# ADAR1000 TX Load Pins (via level shifters, active-high pulse)
+set_property PACKAGE_PIN P3 [get_ports {adar_tx_load_1}]
+set_property PACKAGE_PIN T4 [get_ports {adar_tx_load_2}]
+set_property PACKAGE_PIN R3 [get_ports {adar_tx_load_3}]
+set_property PACKAGE_PIN R2 [get_ports {adar_tx_load_4}]
 
-# ADAR1000 TR Pins
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tr_1}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tr_2}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tr_3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adar_tr_4}]
-set_property IOSTANDARD LVCMOS33 [get_ports {adar_tr_*}]
+# ADAR1000 RX Load Pins
+set_property PACKAGE_PIN M5 [get_ports {adar_rx_load_1}]
+set_property PACKAGE_PIN T2 [get_ports {adar_rx_load_2}]
+set_property PACKAGE_PIN R1 [get_ports {adar_rx_load_3}]
+set_property PACKAGE_PIN N4 [get_ports {adar_rx_load_4}]
+
+# Bank 34 VCCO = 1.8V → must use LVCMOS18 (not LVCMOS33)
+set_property IOSTANDARD LVCMOS18 [get_ports {adar_*_load_*}]
+
+# ADAR1000 TR (Transmit/Receive) Pins
+set_property PACKAGE_PIN N2 [get_ports {adar_tr_1}]
+set_property PACKAGE_PIN N1 [get_ports {adar_tr_2}]
+set_property PACKAGE_PIN P1 [get_ports {adar_tr_3}]
+set_property PACKAGE_PIN P4 [get_ports {adar_tr_4}]
+set_property IOSTANDARD LVCMOS18 [get_ports {adar_tr_*}]
 
 # ============================================================================
-# LEVEL SHIFTER SPI INTERFACE (STM32 to ADAR1000)
+# LEVEL SHIFTER SPI INTERFACE (STM32 ↔ ADAR1000)
 # ============================================================================
 
-# 3.3V Side (from STM32)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_sclk_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_mosi_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_miso_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar1_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar2_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar3_3v3}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar4_3v3}]
+# 3.3V Side (from STM32, Bank 15, VCCO=3.3V)
+set_property PACKAGE_PIN J16 [get_ports {stm32_sclk_3v3}]
+set_property PACKAGE_PIN H13 [get_ports {stm32_mosi_3v3}]
+set_property PACKAGE_PIN G14 [get_ports {stm32_miso_3v3}]
+set_property PACKAGE_PIN F14 [get_ports {stm32_cs_adar1_3v3}]
+set_property PACKAGE_PIN H16 [get_ports {stm32_cs_adar2_3v3}]
+set_property PACKAGE_PIN G16 [get_ports {stm32_cs_adar3_3v3}]
+set_property PACKAGE_PIN J15 [get_ports {stm32_cs_adar4_3v3}]
 set_property IOSTANDARD LVCMOS33 [get_ports {stm32_*_3v3}]
 
-# 1.8V Side (to ADAR1000)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_sclk_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_mosi_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_miso_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar1_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar2_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar3_1v8}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_cs_adar4_1v8}]
+# 1.8V Side (to ADAR1000, Bank 34, VCCO=1.8V)
+set_property PACKAGE_PIN P5 [get_ports {stm32_sclk_1v8}]
+set_property PACKAGE_PIN M1 [get_ports {stm32_mosi_1v8}]
+set_property PACKAGE_PIN N3 [get_ports {stm32_miso_1v8}]
+set_property PACKAGE_PIN L5 [get_ports {stm32_cs_adar1_1v8}]
+set_property PACKAGE_PIN L4 [get_ports {stm32_cs_adar2_1v8}]
+set_property PACKAGE_PIN M4 [get_ports {stm32_cs_adar3_1v8}]
+set_property PACKAGE_PIN M2 [get_ports {stm32_cs_adar4_1v8}]
 set_property IOSTANDARD LVCMOS18 [get_ports {stm32_*_1v8}]
 
 # ============================================================================
-# STM32 CONTROL INTERFACE
+# STM32 CONTROL INTERFACE (DIG bus, Bank 15, VCCO=3.3V)
 # ============================================================================
+# DIG_0..DIG_4 are STM32 outputs (PD8-PD12) → FPGA inputs
+# DIG_5..DIG_7 are STM32 inputs (PD13-PD15) ← FPGA outputs (unused in RTL)
 
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_new_chirp}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_new_elevation}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_new_azimuth}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {stm32_mixers_enable}]
+set_property PACKAGE_PIN F13 [get_ports {stm32_new_chirp}]       ;# DIG_0 (PD8)
+set_property PACKAGE_PIN E16 [get_ports {stm32_new_elevation}]   ;# DIG_1 (PD9)
+set_property PACKAGE_PIN D16 [get_ports {stm32_new_azimuth}]     ;# DIG_2 (PD10)
+set_property PACKAGE_PIN F15 [get_ports {stm32_mixers_enable}]   ;# DIG_3 (PD11)
 set_property IOSTANDARD LVCMOS33 [get_ports {stm32_new_*}]
 set_property IOSTANDARD LVCMOS33 [get_ports {stm32_mixers_enable}]
+# reset_n is DIG_4 (PD12) — constrained above in the RESET section
+
+# DIG_5 = H11, DIG_6 = G12, DIG_7 = H12 — available for FPGA→STM32 status
+# Currently unused in RTL. Could be connected to status outputs if needed.
 
 # ============================================================================
-# ADC INTERFACE (LVDS - 400MHz)
+# ADC INTERFACE (LVDS — Bank 14, VCCO=3.3V)
 # ============================================================================
 
-# ADC Data (LVDS pairs)
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[6]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[6]}]
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_d_p[7]}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_d_n[7]}]
+# ADC Data (8-bit LVDS pairs from AD9484)
+set_property PACKAGE_PIN P15 [get_ports {adc_d_p[0]}]
+set_property PACKAGE_PIN P16 [get_ports {adc_d_n[0]}]
+set_property PACKAGE_PIN R15 [get_ports {adc_d_p[1]}]
+set_property PACKAGE_PIN R16 [get_ports {adc_d_n[1]}]
+set_property PACKAGE_PIN T14 [get_ports {adc_d_p[2]}]
+set_property PACKAGE_PIN T15 [get_ports {adc_d_n[2]}]
+set_property PACKAGE_PIN R13 [get_ports {adc_d_p[3]}]
+set_property PACKAGE_PIN T13 [get_ports {adc_d_n[3]}]
+set_property PACKAGE_PIN R10 [get_ports {adc_d_p[4]}]
+set_property PACKAGE_PIN R11 [get_ports {adc_d_n[4]}]
+set_property PACKAGE_PIN T9  [get_ports {adc_d_p[5]}]
+set_property PACKAGE_PIN T10 [get_ports {adc_d_n[5]}]
+set_property PACKAGE_PIN T7  [get_ports {adc_d_p[6]}]
+set_property PACKAGE_PIN T8  [get_ports {adc_d_n[6]}]
+set_property PACKAGE_PIN R6  [get_ports {adc_d_p[7]}]
+set_property PACKAGE_PIN R7  [get_ports {adc_d_n[7]}]
 
-# ADC DCO Clock (LVDS)
-set_property PACKAGE_PIN [PIN_NUMBER_P] [get_ports {adc_dco_p}]
-set_property PACKAGE_PIN [PIN_NUMBER_N] [get_ports {adc_dco_n}]
+# ADC DCO Clock (LVDS) — already constrained above in CLOCK section
 
-# ADC Power Down
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {adc_pwdn}]
+# ADC Power Down — ADC_PWRD net (single-ended, Bank 14)
+set_property PACKAGE_PIN T5 [get_ports {adc_pwdn}]
 set_property IOSTANDARD LVCMOS33 [get_ports {adc_pwdn}]
 
-# LVDS Constraints
-set_property IOSTANDARD LVDS_25 [get_ports {adc_d_p[*]}]
-set_property IOSTANDARD LVDS_25 [get_ports {adc_d_n[*]}]
-set_property IOSTANDARD LVDS_25 [get_ports {adc_dco_p}]
-set_property IOSTANDARD LVDS_25 [get_ports {adc_dco_n}]
+# LVDS I/O Standard — Bank 14 VCCO = 3.3V → use LVDS_33 (not LVDS_25)
+set_property IOSTANDARD LVDS_33 [get_ports {adc_d_p[*]}]
+set_property IOSTANDARD LVDS_33 [get_ports {adc_d_n[*]}]
 
-# Differential pair constraints
+# Differential termination
 set_property DIFF_TERM TRUE [get_ports {adc_d_p[*]}]
-set_property DIFF_TERM TRUE [get_ports {adc_dco_p}]
 
-# Input delay for ADC data (adjust based on PCB trace length)
+# Input delay for ADC data relative to DCO (adjust based on PCB trace length)
 set_input_delay -clock [get_clocks adc_dco_p] -max 1.0 [get_ports {adc_d_p[*]}]
 set_input_delay -clock [get_clocks adc_dco_p] -min 0.2 [get_ports {adc_d_p[*]}]
 
 # ============================================================================
-# FT601 USB 3.0 INTERFACE
+# FT601 USB 3.0 INTERFACE — ACTIVE: NO PHYSICAL CONNECTIONS
+# ============================================================================
+# The FT601 chip (U6, FT601Q-B-T) is placed in the Eagle schematic but has
+# ZERO net connections — no signals are routed between it and the FPGA.
+# Bank 35 (which would logically host FT601 signals) has no signal pins
+# connected, only VCCO_35 power.
+#
+# ALL FT601 constraints are commented out. The RTL module usb_data_interface.v
+# instantiates the FT601 interface, but it cannot function without physical
+# pin assignments. To use USB, the schematic must be updated to wire the
+# FT601 to FPGA Bank 35 pins, and then these constraints can be populated.
+#
+# Ports affected (from radar_system_top.v):
+#   ft601_data[31:0], ft601_be[1:0], ft601_txe_n, ft601_rxf_n, ft601_txe,
+#   ft601_rxf, ft601_wr_n, ft601_rd_n, ft601_oe_n, ft601_siwu_n,
+#   ft601_srb[1:0], ft601_swb[1:0], ft601_clk_out, ft601_clk_in
+#
+# TODO: Wire FT601 in schematic, then assign pins here.
 # ============================================================================
 
-# FT601 Data Bus (32-bit bidirectional)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[6]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[7]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[8]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[9]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[10]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[11]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[12]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[13]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[14]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[15]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[16]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[17]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[18]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[19]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[20]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[21]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[22]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[23]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[24]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[25]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[26]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[27]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[28]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[29]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[30]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_data[31]}]
-
-# Byte enables
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_be[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_be[1]}]
-
-# Control signals
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_txe_n}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_rxf_n}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_txe}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_rxf}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_wr_n}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_rd_n}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_oe_n}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_siwu_n}]
-
-# FIFO flags
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_srb[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_srb[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_swb[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_swb[1]}]
-
-# Clock out (optional)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {ft601_clk_out}]
-
-# FT601 I/O Standards (3.3V for FT601)
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_data[*]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_be[*]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_txe_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_rxf_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_txe}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_rxf}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_wr_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_rd_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_oe_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_siwu_n}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_srb[*]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_swb[*]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {ft601_clk_out}]
-
-# FT601 timing constraints
-set_output_delay -clock [get_clocks ft601_clk_in] -max 2.0 [get_ports {ft601_data[*]}]
-set_output_delay -clock [get_clocks ft601_clk_in] -min 0.5 [get_ports {ft601_data[*]}]
-set_output_delay -clock [get_clocks ft601_clk_in] -max 2.0 [get_ports {ft601_be[*]}]
-set_output_delay -clock [get_clocks ft601_clk_in] -min 0.5 [get_ports {ft601_be[*]}]
-
 # ============================================================================
-# STATUS OUTPUTS
+# STATUS / DEBUG OUTPUTS — NO PHYSICAL CONNECTIONS
 # ============================================================================
-
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_elevation[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_azimuth[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[3]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {current_chirp[5]}]
-
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {new_chirp_frame}]
-set_property IOSTANDARD LVCMOS33 [get_ports {new_chirp_frame}]
-
-# Debug outputs
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_doppler_data[0]}]
-# ... (continue for all 32 bits)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_doppler_data[31]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_doppler_valid}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_doppler_bin[0]}]
-# ... (continue for all 5 bits)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_doppler_bin[4]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_range_bin[0]}]
-# ... (continue for all 6 bits)
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {dbg_range_bin[5]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {system_status[0]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {system_status[1]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {system_status[2]}]
-set_property PACKAGE_PIN [PIN_NUMBER] [get_ports {system_status[3]}]
-
-set_property IOSTANDARD LVCMOS33 [get_ports {dbg_*}]
-set_property IOSTANDARD LVCMOS33 [get_ports {system_status[*]}]
+# The following RTL output ports have no corresponding FPGA pins in the
+# schematic. The only FPGA→STM32 outputs available are DIG_5 (H11),
+# DIG_6 (G12), and DIG_7 (H12) — only 3 pins for potentially 60+ signals.
+#
+# These constraints are commented out. If status readback is needed, either:
+#   (a) Multiplex selected status bits onto DIG_5/6/7, or
+#   (b) Send status data over the SPI interface, or
+#   (c) Route through USB once FT601 is wired.
+#
+# Ports affected:
+#   current_elevation[5:0], current_azimuth[5:0], current_chirp[5:0],
+#   new_chirp_frame, dbg_doppler_data[31:0], dbg_doppler_valid,
+#   dbg_doppler_bin[4:0], dbg_range_bin[5:0], system_status[3:0]
+# ============================================================================
 
 # ============================================================================
 # TIMING EXCEPTIONS
 # ============================================================================
 
-# False paths for asynchronous signals
+# False paths for asynchronous STM32 control signals (active-edge toggle interface)
 set_false_path -from [get_ports {stm32_new_*}]
 set_false_path -from [get_ports {stm32_mixers_enable}]
 
@@ -315,26 +268,14 @@ set_false_path -from [get_ports {stm32_mixers_enable}]
 #   - Route delay alone exceeds the clock period (18+ ns for 10ns period)
 #   - Reset deassertion order is not functionally critical — all registers
 #     come out of reset within a few cycles of each other
-#
-# This covers:
-#   - async_default path group (clk_100m intra-clock, WNS = -11.025ns)
-#   - clk_100m → clk_120m_dac CDC reset paths (WNS = -3.200ns)
-#   - clk_100m → ft601_clk_in CDC reset paths (WNS = -3.188ns)
 # --------------------------------------------------------------------------
 set_false_path -from [get_cells reset_sync_reg[*]] -to [get_pins -filter {REF_PIN_NAME == CLR} -of_objects [get_cells -hierarchical -filter {PRIMITIVE_TYPE =~ REGISTER.*.*}]]
 
 # --------------------------------------------------------------------------
 # Clock Domain Crossing false paths
-#
-# These clock domains are asynchronous to each other. Data crossing between
-# them uses proper CDC synchronizers (2-stage or 3-stage) with ASYNC_REG
-# attributes. The timing tool should not attempt to time these paths as
-# single-cycle transfers.
 # --------------------------------------------------------------------------
 
-# clk_100m ↔ adc_dco_p (400 MHz): DDC reset synchronizer handles this
-# The DDC has an internal 2-stage reset synchronizer for the 400 MHz domain.
-# Any remaining CDC paths between these domains use proper synchronizers.
+# clk_100m ↔ adc_dco_p (400 MHz): DDC has internal CDC synchronizers
 set_false_path -from [get_clocks clk_100m] -to [get_clocks adc_dco_p]
 set_false_path -from [get_clocks adc_dco_p] -to [get_clocks clk_100m]
 
@@ -342,27 +283,40 @@ set_false_path -from [get_clocks adc_dco_p] -to [get_clocks clk_100m]
 set_false_path -from [get_clocks clk_100m] -to [get_clocks clk_120m_dac]
 set_false_path -from [get_clocks clk_120m_dac] -to [get_clocks clk_100m]
 
-# clk_100m ↔ ft601_clk_in: CDC via synchronizers in usb_data_interface
-set_false_path -from [get_clocks clk_100m] -to [get_clocks ft601_clk_in]
-set_false_path -from [get_clocks ft601_clk_in] -to [get_clocks clk_100m]
-
-# Multicycle paths for slow signals (kept from original constraints)
-# NOTE: The false_path above supersedes this for clk_100m→ft601_clk_in,
-# but keeping it for documentation of the original design intent.
-# set_multicycle_path -setup 2 -from [get_clocks clk_100m] -to [get_clocks ft601_clk_in]
-# set_multicycle_path -hold 1 -from [get_clocks clk_100m] -to [get_clocks ft601_clk_in]
+# FT601 CDC paths removed — no ft601_clk_in clock defined (chip unwired)
 
 # ============================================================================
 # PHYSICAL CONSTRAINTS
 # ============================================================================
 
-# Group related pins into banks
+# Pull up unused pins to prevent floating inputs
 set_property BITSTREAM.CONFIG.UNUSEDPIN Pullup [current_design]
 
-# Place high-speed interfaces in same bank
-set_property PACKAGE_PIN_BANK [BANK_NUMBER] [get_ports {ft601_data[*]}]
-set_property PACKAGE_PIN_BANK [BANK_NUMBER] [get_ports {ft601_*_n}]
-
+# ============================================================================
+# ADDITIONAL NOTES
+# ============================================================================
+#
+# 1. ADC Sampling Clock: FPGA_ADC_CLOCK_P/N (N11/N12) is the 400 MHz LVDS
+#    clock from AD9523 OUT5 that drives the AD9484. It connects to FPGA MRCC
+#    pins but is not used as an FPGA clock input — the ADC returns data with
+#    its own DCO (adc_dco_p/n on N14/P14).
+#
+# 2. Clock Test: FPGA_CLOCK_TEST (H14) is a 20 MHz LVCMOS output from the
+#    FPGA, configured by AD9523 OUT7. Not currently used in RTL.
+#
+# 3. SPI Flash: FPGA_FLASH_CS (E8), FPGA_FLASH_CLK (J13),
+#    FPGA_FLASH_D0 (J14), D1 (K15), D2 (K16), D3 (L12), unnamed (L13).
+#    These are typically handled by Vivado bitstream configuration and do
+#    not need explicit XDC constraints for user logic.
+#
+# 4. JTAG: FPGA_TCK (L7), FPGA_TDI (N7), FPGA_TDO (N8), FPGA_TMS (M7).
+#    Dedicated pins — no XDC constraints needed.
+#
+# 5. dac_clk port: The RTL top module declares `dac_clk` as an output, but
+#    the physical board wires the DAC clock (AD9708 CLOCK pin) directly from
+#    the AD9523, not from the FPGA. This port should be removed from the RTL
+#    or left unconnected. It currently just assigns clk_120m_dac passthrough.
+#
 # ============================================================================
 # END OF CONSTRAINTS
 # ============================================================================
