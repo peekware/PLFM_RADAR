@@ -92,8 +92,13 @@ integer i;
 
 // ============================================================================
 // Pipeline Stage 0: Shift delay line on data_valid
+// Sync reset: enables DSP48E1 AREG/BREG absorption for delay_line registers
+// feeding the multipliers. Async reset (FDCE) prevented Vivado from using
+// the DSP48E1 internal A/B pipeline registers — the source of 2,522 DPIR-1
+// methodology warnings in Build 9. Converting to sync reset (FDRE) allows
+// Vivado to absorb these into DSP48E1 AREG/BREG, further reducing LUT count.
 // ============================================================================
-always @(posedge clk or negedge reset_n) begin
+always @(posedge clk) begin
     if (!reset_n) begin
         for (i = 0; i < TAPS; i = i + 1) begin
             delay_line[i] <= 0;

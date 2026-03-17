@@ -476,7 +476,7 @@ assign pcout_3 = sim_int_3;
 // CONTROL AND MONITORING (fabric logic)
 // ============================================================================
 reg signed [COMB_WIDTH-1:0] integrator_sampled;
-reg signed [COMB_WIDTH-1:0] comb [0:STAGES-1];
+(* use_dsp = "yes" *) reg signed [COMB_WIDTH-1:0] comb [0:STAGES-1];
 reg signed [COMB_WIDTH-1:0] comb_delay [0:STAGES-1][0:COMB_DELAY-1];
 
 // Enhanced control and monitoring
@@ -545,7 +545,9 @@ initial begin
 end
 
 // Decimation control + monitoring (integrators are now DSP48E1 instances)
-always @(posedge clk or negedge reset_n) begin
+// Sync reset: enables FDRE inference for better timing at 400 MHz.
+// Reset is already synchronous to clk via reset synchronizer in parent module.
+always @(posedge clk) begin
     if (!reset_n) begin
         integrator_sampled <= 0;
         decimation_counter <= 0;
@@ -599,7 +601,8 @@ always @(posedge clk or negedge reset_n) begin
 end
 
 // Pipeline the valid signal for comb section
-always @(posedge clk or negedge reset_n) begin
+// Sync reset: matches decimation control block reset style.
+always @(posedge clk) begin
     if (!reset_n) begin
         data_valid_comb <= 0;
     end else begin
@@ -608,7 +611,20 @@ always @(posedge clk or negedge reset_n) begin
 end
 
 // Enhanced comb section with scaling and saturation monitoring
-always @(posedge clk or negedge reset_n) begin
+// Sync reset: converts FDCE → FDRE for all comb registers. This eliminates
+// async-clear routing overhead and enables DSP48E1 absorption of the 28-bit
+// subtracts via Vivado's use_dsp inference. The comb subtraction was the
+// design-wide critical path in Build 9 (8 logic levels of CARRY4 at 400 MHz,
+// WNS = +0.128ns). DSP48E1 ALU performs 48-bit add/subtract in a single
+// cycle with zero fabric logic, targeting WNS > +1.0ns.
+//
+// The (* use_dsp = "yes" *) attribute on comb[] tells Vivado synthesis to
+// map the subtract into DSP48E1 P = C - A:B (ALUMODE=4'b0011). Each comb
+// stage becomes one DSP48E1 with PREG=1, completely eliminating the CARRY4
+// chain from fabric. With 5 stages × 2 channels (I/Q) = 10 additional
+// DSP48E1s, total DSP usage rises from 130 to ~140 out of 740 (18.9%).
+
+always @(posedge clk) begin
     if (!reset_n) begin
         for (i = 0; i < STAGES; i = i + 1) begin
             comb[i] <= 0;
