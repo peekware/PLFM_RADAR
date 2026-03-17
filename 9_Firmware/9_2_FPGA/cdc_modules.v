@@ -44,6 +44,7 @@ module cdc_adc_to_processing #(
     
     // Source domain registers
     reg [WIDTH-1:0] src_data_reg;
+    reg [WIDTH-1:0] src_data_gray;   // Gray-encoded in source domain
     reg [1:0] src_toggle = 2'b00;
     
     // Destination domain synchronizer registers
@@ -54,14 +55,18 @@ module cdc_adc_to_processing #(
     reg dst_valid_reg = 0;
     reg [1:0] prev_dst_toggle = 2'b00;
     
-    // Source domain: capture data and toggle — synchronous reset
+    // Source domain: capture data, Gray-encode, and toggle — synchronous reset
+    // Gray encoding is registered in src_clk to avoid combinational logic
+    // before the first synchronizer FF (fixes CDC-10 violations).
     always @(posedge src_clk) begin
         if (!reset_n) begin
-            src_data_reg <= 0;
-            src_toggle <= 2'b00;
+            src_data_reg  <= 0;
+            src_data_gray <= 0;
+            src_toggle    <= 2'b00;
         end else if (src_valid) begin
-            src_data_reg <= src_data;
-            src_toggle <= src_toggle + 1;
+            src_data_reg  <= src_data;
+            src_data_gray <= binary_to_gray(src_data);
+            src_toggle    <= src_toggle + 1;
         end
     end
     
@@ -77,8 +82,8 @@ module cdc_adc_to_processing #(
                     dst_data_gray[i] <= 0;
                 end else begin
                     if (i == 0) begin
-                        // Convert to gray code at domain crossing
-                        dst_data_gray[i] <= binary_to_gray(src_data_reg);
+                        // Sample registered Gray-code from source domain
+                        dst_data_gray[i] <= src_data_gray;
                     end else begin
                         dst_data_gray[i] <= dst_data_gray[i-1];
                     end

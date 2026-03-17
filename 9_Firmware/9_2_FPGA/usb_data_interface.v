@@ -1,6 +1,7 @@
 module usb_data_interface (
     input wire clk,              // Main clock (100MHz recommended)
     input wire reset_n,
+    input wire ft601_reset_n,    // FT601-domain synchronized reset
     
     // Radar data inputs
     input wire [31:0] range_profile,
@@ -67,7 +68,40 @@ reg ft601_data_oe;  // Output enable for bidirectional data bus
 (* ASYNC_REG = "TRUE" *) reg [1:0] doppler_valid_sync;
 (* ASYNC_REG = "TRUE" *) reg [1:0] cfar_valid_sync;
 
-// Synchronized data captures (registered in ft601_clk_in domain)
+// Delayed versions of sync[1] for proper edge detection
+reg range_valid_sync_d;
+reg doppler_valid_sync_d;
+reg cfar_valid_sync_d;
+
+// Holding registers: data captured in SOURCE domain (clk_100m) when valid
+// asserts, then read by ft601 domain after synchronized valid edge.
+// This is safe because the data is stable for the entire time the valid
+// pulse is being synchronized (2+ ft601_clk cycles).
+reg [31:0] range_profile_hold;
+reg [15:0] doppler_real_hold;
+reg [15:0] doppler_imag_hold;
+reg cfar_detection_hold;
+
+// Source-domain holding registers (clk domain)
+always @(posedge clk or negedge reset_n) begin
+    if (!reset_n) begin
+        range_profile_hold <= 32'd0;
+        doppler_real_hold  <= 16'd0;
+        doppler_imag_hold  <= 16'd0;
+        cfar_detection_hold <= 1'b0;
+    end else begin
+        if (range_valid)
+            range_profile_hold <= range_profile;
+        if (doppler_valid) begin
+            doppler_real_hold <= doppler_real;
+            doppler_imag_hold <= doppler_imag;
+        end
+        if (cfar_valid)
+            cfar_detection_hold <= cfar_detection;
+    end
+end
+
+// FT601-domain captured data (sampled from holding regs on sync'd edge)
 reg [31:0] range_profile_cap;
 reg [15:0] doppler_real_cap;
 reg [15:0] doppler_imag_cap;
@@ -77,43 +111,53 @@ wire range_valid_ft;
 wire doppler_valid_ft;
 wire cfar_valid_ft;
 
-always @(posedge ft601_clk_in or negedge reset_n) begin
-    if (!reset_n) begin
+always @(posedge ft601_clk_in or negedge ft601_reset_n) begin
+    if (!ft601_reset_n) begin
         range_valid_sync   <= 2'b00;
         doppler_valid_sync <= 2'b00;
         cfar_valid_sync    <= 2'b00;
+        range_valid_sync_d   <= 1'b0;
+        doppler_valid_sync_d <= 1'b0;
+        cfar_valid_sync_d    <= 1'b0;
         range_profile_cap  <= 32'd0;
         doppler_real_cap   <= 16'd0;
         doppler_imag_cap   <= 16'd0;
         cfar_detection_cap <= 1'b0;
     end else begin
-        // Synchronize valid strobes
+        // Synchronize valid strobes (2-stage sync chain)
         range_valid_sync   <= {range_valid_sync[0],   range_valid};
         doppler_valid_sync <= {doppler_valid_sync[0], doppler_valid};
         cfar_valid_sync    <= {cfar_valid_sync[0],    cfar_valid};
 
-        // Capture data on rising edge of synchronized valid
-        if (range_valid_sync[0] && !range_valid_sync[1])
-            range_profile_cap <= range_profile;
-        if (doppler_valid_sync[0] && !doppler_valid_sync[1]) begin
-            doppler_real_cap <= doppler_real;
-            doppler_imag_cap <= doppler_imag;
+        // Delayed version of sync[1] for edge detection
+        range_valid_sync_d   <= range_valid_sync[1];
+        doppler_valid_sync_d <= doppler_valid_sync[1];
+        cfar_valid_sync_d    <= cfar_valid_sync[1];
+
+        // Capture data on rising edge of FULLY SYNCHRONIZED valid (sync[1])
+        // Data in holding regs is stable by the time sync[1] rises (2+ cycles)
+        if (range_valid_sync[1] && !range_valid_sync_d)
+            range_profile_cap <= range_profile_hold;
+        if (doppler_valid_sync[1] && !doppler_valid_sync_d) begin
+            doppler_real_cap <= doppler_real_hold;
+            doppler_imag_cap <= doppler_imag_hold;
         end
-        if (cfar_valid_sync[0] && !cfar_valid_sync[1])
-            cfar_detection_cap <= cfar_detection;
+        if (cfar_valid_sync[1] && !cfar_valid_sync_d)
+            cfar_detection_cap <= cfar_detection_hold;
     end
 end
 
-// Rising-edge detect on synchronized valid (pulse in ft601_clk_in domain)
-assign range_valid_ft   = range_valid_sync[0]   && !range_valid_sync[1];
-assign doppler_valid_ft = doppler_valid_sync[0]  && !doppler_valid_sync[1];
-assign cfar_valid_ft    = cfar_valid_sync[0]     && !cfar_valid_sync[1];
+// Rising-edge detect on FULLY SYNCHRONIZED valid (sync[1], not sync[0])
+// This provides full 2-stage metastability protection before use.
+assign range_valid_ft   = range_valid_sync[1]   && !range_valid_sync_d;
+assign doppler_valid_ft = doppler_valid_sync[1]  && !doppler_valid_sync_d;
+assign cfar_valid_ft    = cfar_valid_sync[1]     && !cfar_valid_sync_d;
 
 // FT601 data bus direction control
 assign ft601_data = ft601_data_oe ? ft601_data_out : 32'hzzzz_zzzz;
 
-always @(posedge ft601_clk_in or negedge reset_n) begin
-    if (!reset_n) begin
+always @(posedge ft601_clk_in or negedge ft601_reset_n) begin
+    if (!ft601_reset_n) begin
         current_state <= IDLE;
         byte_counter <= 0;
         ft601_data_out <= 0;
@@ -248,8 +292,8 @@ ODDR #(
 `else
 // Simulation: behavioral clock forwarding
 reg ft601_clk_out_sim;
-always @(posedge ft601_clk_in or negedge reset_n) begin
-    if (!reset_n)
+always @(posedge ft601_clk_in or negedge ft601_reset_n) begin
+    if (!ft601_reset_n)
         ft601_clk_out_sim <= 1'b0;
     else
         ft601_clk_out_sim <= 1'b1;

@@ -133,6 +133,11 @@ wire clk_120m_dac_buf;
 wire ft601_clk_buf;
 wire sys_reset_n;
 wire sys_reset_120m_n;  // Reset synchronized to clk_120m_dac domain
+wire sys_reset_ft601_n; // Reset synchronized to ft601_clk domain
+
+// CDC: synchronized versions of async inputs for status_reg
+wire stm32_mixers_enable_100m;  // stm32_mixers_enable sync'd to clk_100m
+wire ft601_txe_100m;            // ft601_txe sync'd to clk_100m
 
 // Transmitter internal signals
 wire [7:0] tx_chirp_data;
@@ -214,6 +219,37 @@ always @(posedge clk_120m_dac_buf or negedge reset_n) begin
 end
 assign sys_reset_120m_n = reset_sync_120m[1];
 
+// Reset synchronization (ft601_clk domain)
+// FT601 has its own asynchronous clock from the USB controller.
+// All FT601-domain registers need a properly synchronized reset.
+(* ASYNC_REG = "TRUE" *) reg [2:0] reset_sync_ft601;  // 3-stage for better MTBF
+always @(posedge ft601_clk_buf or negedge reset_n) begin
+    if (!reset_n) begin
+        reset_sync_ft601 <= 3'b000;
+    end else begin
+        reset_sync_ft601 <= {reset_sync_ft601[1:0], 1'b1};
+    end
+end
+assign sys_reset_ft601_n = reset_sync_ft601[2];
+
+// CDC synchronizers for status_reg inputs (async -> clk_100m)
+// stm32_mixers_enable is an async GPIO; ft601_txe is on ft601_clk domain
+cdc_single_bit #(.STAGES(2)) cdc_mixers_en_status (
+    .src_clk(clk_100m_buf),           // Pseudo-source for async GPIO
+    .dst_clk(clk_100m_buf),
+    .reset_n(sys_reset_n),
+    .src_signal(stm32_mixers_enable),
+    .dst_signal(stm32_mixers_enable_100m)
+);
+
+cdc_single_bit #(.STAGES(2)) cdc_ft601_txe_status (
+    .src_clk(ft601_clk_buf),
+    .dst_clk(clk_100m_buf),
+    .reset_n(sys_reset_n),
+    .src_signal(ft601_txe),
+    .dst_signal(ft601_txe_100m)
+);
+
 // ============================================================================
 // CLOCK DOMAIN CROSSING: TRANSMITTER (120 MHz) -> SYSTEM (100 MHz)
 // ============================================================================
@@ -232,16 +268,37 @@ cdc_adc_to_processing #(
     .dst_valid(tx_current_chirp_sync_valid)
 );
 
-// CDC for new_chirp_frame: single-bit 3-stage synchronizer
+// CDC for new_chirp_frame: toggle CDC (pulse on clk_120m -> pulse on clk_100m)
+// new_chirp_frame is a 1-cycle pulse on clk_120m_dac. A level synchronizer
+// at 100 MHz can miss it. Toggle CDC converts pulse -> level toggle,
+// synchronizes the toggle, then detects edges to recover the pulse.
+reg chirp_frame_toggle_120m;
+always @(posedge clk_120m_dac_buf or negedge sys_reset_120m_n) begin
+    if (!sys_reset_120m_n)
+        chirp_frame_toggle_120m <= 1'b0;
+    else if (tx_new_chirp_frame)
+        chirp_frame_toggle_120m <= ~chirp_frame_toggle_120m;
+end
+
+wire chirp_frame_toggle_100m;
 cdc_single_bit #(
     .STAGES(3)
 ) cdc_new_chirp_frame (
     .src_clk(clk_120m_dac_buf),
     .dst_clk(clk_100m_buf),
     .reset_n(sys_reset_n),
-    .src_signal(tx_new_chirp_frame),
-    .dst_signal(tx_new_chirp_frame_sync)
+    .src_signal(chirp_frame_toggle_120m),
+    .dst_signal(chirp_frame_toggle_100m)
 );
+
+reg chirp_frame_toggle_100m_prev;
+always @(posedge clk_100m_buf or negedge sys_reset_n) begin
+    if (!sys_reset_n)
+        chirp_frame_toggle_100m_prev <= 1'b0;
+    else
+        chirp_frame_toggle_100m_prev <= chirp_frame_toggle_100m;
+end
+assign tx_new_chirp_frame_sync = chirp_frame_toggle_100m ^ chirp_frame_toggle_100m_prev;
 
 // ============================================================================
 // RADAR TRANSMITTER INSTANTIATION
@@ -396,6 +453,7 @@ assign usb_cfar_valid = rx_cfar_valid;
 usb_data_interface usb_inst (
     .clk(clk_100m_buf),
     .reset_n(sys_reset_n),
+    .ft601_reset_n(sys_reset_ft601_n),  // FT601-domain synchronized reset
     
     // Radar data inputs
     .range_profile(usb_range_profile),
@@ -445,8 +503,8 @@ always @(posedge clk_100m_buf or negedge sys_reset_n) begin
     if (!sys_reset_n) begin
         status_reg <= 4'b0000;
     end else begin
-        status_reg[0] <= stm32_mixers_enable;      // Mixers enabled
-        status_reg[1] <= ft601_txe;                 // USB TX ready
+        status_reg[0] <= stm32_mixers_enable_100m;  // Mixers enabled (CDC sync'd)
+        status_reg[1] <= ft601_txe_100m;             // USB TX ready (CDC sync'd)
         status_reg[2] <= rx_doppler_valid;          // Data valid
         status_reg[3] <= tx_new_chirp_frame_sync;   // New chirp frame (CDC-sync'd)
     end

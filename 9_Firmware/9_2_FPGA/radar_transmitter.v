@@ -84,10 +84,55 @@ wire new_chirp_pulse;
 wire new_elevation_pulse;
 wire new_azimuth_pulse;
 
+// CDC: Synchronized versions of signals crossing clk_100m -> clk_120m_dac
+wire mixers_enable_120m;   // stm32_mixers_enable sync'd to clk_120m_dac
+wire new_chirp_pulse_120m; // new_chirp_pulse (toggle CDC) in clk_120m_dac domain
+
 // Chirp Control Signals
 wire [7:0] chirp_data;
 wire chirp_valid;
 wire chirp_sequence_done;
+
+// Toggle CDC for new_chirp_pulse: clk_100m -> clk_120m_dac
+// Edge detector produces a 1-cycle pulse on clk_100m. A level synchronizer
+// would miss it (120/100 MHz ratio). Toggle CDC converts pulse to level toggle,
+// syncs the toggle, then detects edges on the destination side.
+reg chirp_toggle_100m;
+always @(posedge clk_100m or negedge reset_n) begin
+    if (!reset_n)
+        chirp_toggle_100m <= 1'b0;
+    else if (new_chirp_pulse)
+        chirp_toggle_100m <= ~chirp_toggle_100m;
+end
+
+// Sync the toggle to clk_120m_dac domain
+wire chirp_toggle_120m;
+cdc_single_bit #(.STAGES(3)) cdc_chirp_toggle (
+    .src_clk(clk_100m),
+    .dst_clk(clk_120m_dac),
+    .reset_n(reset_n),
+    .src_signal(chirp_toggle_100m),
+    .dst_signal(chirp_toggle_120m)
+);
+
+// Detect edges on synchronized toggle to recover pulse in clk_120m domain
+reg chirp_toggle_120m_prev;
+always @(posedge clk_120m_dac or negedge reset_n) begin
+    if (!reset_n)
+        chirp_toggle_120m_prev <= 1'b0;
+    else
+        chirp_toggle_120m_prev <= chirp_toggle_120m;
+end
+assign new_chirp_pulse_120m = chirp_toggle_120m ^ chirp_toggle_120m_prev;
+
+// Sync stm32_mixers_enable (async GPIO level) to clk_120m_dac domain
+cdc_single_bit #(.STAGES(3)) cdc_mixers_en_120m (
+    .src_clk(clk_100m),         // Treat as pseudo-source (GPIO is async)
+    .dst_clk(clk_120m_dac),
+    .reset_n(reset_n),
+    .src_signal(stm32_mixers_enable),
+    .dst_signal(mixers_enable_120m)
+);
 
 // Enhanced STM32 Input Edge Detection with Debouncing
 edge_detector_enhanced chirp_edge (
@@ -116,11 +161,11 @@ plfm_chirp_controller_enhanced plfm_chirp_inst (
     .clk_120m(clk_120m_dac),
     .clk_100m(clk_100m),
     .reset_n(reset_n),
-    .new_chirp(new_chirp_pulse),
+    .new_chirp(new_chirp_pulse_120m),      // CDC-synchronized pulse in clk_120m domain
     .new_elevation(new_elevation_pulse),
     .new_azimuth(new_azimuth_pulse),
     .new_chirp_frame(new_chirp_frame),
-    .mixers_enable(stm32_mixers_enable),
+    .mixers_enable(mixers_enable_120m),    // CDC-synchronized level in clk_120m domain
     .chirp_data(chirp_data),
     .chirp_valid(chirp_valid),
     .chirp_done(chirp_sequence_done),

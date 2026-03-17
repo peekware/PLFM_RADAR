@@ -55,6 +55,7 @@ module tb_usb_data_interface;
     usb_data_interface uut (
         .clk              (clk),
         .reset_n          (reset_n),
+        .ft601_reset_n    (reset_n),     // In TB, share same reset for both domains
         .range_profile    (range_profile),
         .range_valid      (range_valid),
         .doppler_real     (doppler_real),
