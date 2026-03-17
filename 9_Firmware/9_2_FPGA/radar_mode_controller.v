@@ -75,6 +75,12 @@ module radar_mode_controller #(
     // Status
     output wire scanning,       // 1 = scan in progress
     output wire scan_complete   // pulse when full scan done
+
+`ifdef FORMAL
+    ,
+    output wire [2:0]  fv_scan_state,
+    output wire [17:0] fv_timer
+`endif
 );
 
 // ============================================================================
@@ -93,6 +99,11 @@ localparam S_ADVANCE     = 3'd6;
 
 // Timing counter
 reg [17:0] timer;  // enough for up to 262143 cycles (~2.6ms at 100 MHz)
+
+`ifdef FORMAL
+assign fv_scan_state = scan_state;
+assign fv_timer      = timer;
+`endif
 
 // Edge detection for STM32 pass-through
 reg stm32_new_chirp_prev;

@@ -19,6 +19,21 @@ module doppler_processor_optimized #(
     output wire processing_active,
     output wire frame_complete,
     output reg [3:0] status
+
+`ifdef FORMAL
+    ,
+    output wire [2:0]  fv_state,
+    output wire [10:0] fv_mem_write_addr,
+    output wire [10:0] fv_mem_read_addr,
+    output wire [5:0]  fv_write_range_bin,
+    output wire [4:0]  fv_write_chirp_index,
+    output wire [5:0]  fv_read_range_bin,
+    output wire [4:0]  fv_read_doppler_index,
+    output wire [9:0]  fv_processing_timeout,
+    output wire        fv_frame_buffer_full,
+    output wire        fv_mem_we,
+    output wire [10:0] fv_mem_waddr_r
+`endif
 );
 
 // ==============================================
@@ -139,6 +154,20 @@ reg [DATA_WIDTH-1:0] mem_wdata_i, mem_wdata_q;
 // Memory read data (registered for BRAM read latency)
 reg [DATA_WIDTH-1:0] mem_rdata_i, mem_rdata_q;
 
+`ifdef FORMAL
+assign fv_state              = state;
+assign fv_mem_write_addr     = mem_write_addr;
+assign fv_mem_read_addr      = mem_read_addr;
+assign fv_write_range_bin    = write_range_bin;
+assign fv_write_chirp_index  = write_chirp_index;
+assign fv_read_range_bin     = read_range_bin;
+assign fv_read_doppler_index = read_doppler_index;
+assign fv_processing_timeout = processing_timeout;
+assign fv_frame_buffer_full  = frame_buffer_full;
+assign fv_mem_we             = mem_we;
+assign fv_mem_waddr_r        = mem_waddr_r;
+`endif
+
 // ----------------------------------------------------------
 // Separate always block for memory writes — NO async reset
 // in sensitivity list, so Vivado can infer Block RAM.
@@ -242,6 +271,12 @@ always @(posedge clk or negedge reset_n) begin
                             read_range_bin <= 0;
                             read_doppler_index <= 0;
                             fft_sample_counter <= 0;
+                            // Reset write pointers — no longer needed for
+                            // this frame, and prevents stale overflow of
+                            // write_chirp_index (which was just incremented
+                            // past CHIRPS_PER_FRAME-1 above).
+                            write_chirp_index <= 0;
+                            write_range_bin <= 0;
                         end
                     end
                 end 
@@ -302,7 +337,8 @@ always @(posedge clk or negedge reset_n) begin
                     // Present BRAM addr for chirp 2 (sub=1 reads chirp 1
                     // from the BRAM read we triggered in S_PRE_READ;
                     // we need chirp 2 ready for sub=2).
-                    read_doppler_index <= 2;
+                    read_doppler_index <= (2 < DOPPLER_FFT_SIZE) ? 2
+                                          : DOPPLER_FFT_SIZE - 1;
                     fft_sample_counter <= 1;
                 end else if (fft_sample_counter <= DOPPLER_FFT_SIZE) begin
                     // Sub 1..32
@@ -317,6 +353,9 @@ always @(posedge clk or negedge reset_n) begin
                         state <= S_FFT_WAIT;
                         fft_sample_counter <= 0;
                         processing_timeout <= 1000;
+                        // Reset read index to prevent stale OOB address
+                        // on BRAM read port during S_FFT_WAIT
+                        read_doppler_index <= 0;
                     end else begin
                         // Sub 1..31: also compute new mult from current BRAM data
                         // mem_rdata_i = data[chirp = fft_sample_counter][rbin]
@@ -326,7 +365,11 @@ always @(posedge clk or negedge reset_n) begin
                                        $signed(window_coeff[fft_sample_counter]);
                         // Advance BRAM read to chirp fft_sample_counter+2
                         // (so data is ready two cycles later when we need it)
-                        read_doppler_index <= fft_sample_counter + 2;
+                        // Clamp to DOPPLER_FFT_SIZE-1 to prevent OOB memory read
+                        if (fft_sample_counter + 2 < DOPPLER_FFT_SIZE)
+                            read_doppler_index <= fft_sample_counter + 2;
+                        else
+                            read_doppler_index <= DOPPLER_FFT_SIZE - 1;
                         fft_sample_counter <= fft_sample_counter + 1;
                     end
                 end

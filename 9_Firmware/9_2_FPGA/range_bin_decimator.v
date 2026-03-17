@@ -52,6 +52,15 @@ module range_bin_decimator #(
     // Configuration
     input wire [1:0] decimation_mode,  // 00=decimate, 01=peak, 10=average
     input wire [9:0] start_bin         // First input bin to process
+
+`ifdef FORMAL
+    ,
+    output wire [2:0]  fv_state,
+    output wire [9:0]  fv_in_bin_count,
+    output wire [3:0]  fv_group_sample_count,
+    output wire [5:0]  fv_output_bin_count,
+    output wire [9:0]  fv_skip_count
+`endif
 );
 
 // ============================================================================
@@ -75,6 +84,14 @@ localparam ST_DONE    = 3'd4;
 
 // Skip counter for start_bin
 reg [9:0] skip_count;
+
+`ifdef FORMAL
+assign fv_state              = state;
+assign fv_in_bin_count       = in_bin_count;
+assign fv_group_sample_count = group_sample_count;
+assign fv_output_bin_count   = output_bin_count;
+assign fv_skip_count         = skip_count;
+`endif
 
 // ============================================================================
 // PEAK DETECTION (Mode 01)

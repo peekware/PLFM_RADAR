@@ -17,6 +17,10 @@ module cdc_adc_to_processing #(
     input wire src_valid,
     output wire [WIDTH-1:0] dst_data,
     output wire dst_valid
+`ifdef FORMAL
+    ,output wire [WIDTH-1:0] fv_src_data_reg,
+    output wire [1:0]       fv_src_toggle
+`endif
 );
 
     // Gray encoding for safe CDC
@@ -50,8 +54,8 @@ module cdc_adc_to_processing #(
     reg dst_valid_reg = 0;
     reg [1:0] prev_dst_toggle = 2'b00;
     
-    // Source domain: capture data and toggle
-    always @(posedge src_clk or negedge reset_n) begin
+    // Source domain: capture data and toggle — synchronous reset
+    always @(posedge src_clk) begin
         if (!reset_n) begin
             src_data_reg <= 0;
             src_toggle <= 2'b00;
@@ -97,8 +101,8 @@ module cdc_adc_to_processing #(
         end
     endgenerate
     
-    // Detect new data
-    always @(posedge dst_clk or negedge reset_n) begin
+    // Detect new data — synchronous reset
+    always @(posedge dst_clk) begin
         if (!reset_n) begin
             dst_data_reg <= 0;
             dst_valid_reg <= 0;
@@ -119,11 +123,18 @@ module cdc_adc_to_processing #(
     
     assign dst_data = dst_data_reg;
     assign dst_valid = dst_valid_reg;
+
+`ifdef FORMAL
+    assign fv_src_data_reg = src_data_reg;
+    assign fv_src_toggle   = src_toggle;
+`endif
     
 endmodule
 
 // ============================================================================
 // CDC FOR SINGLE BIT SIGNALS
+// Uses synchronous reset on sync chain to avoid metastability on reset
+// deassertion. Matches cdc_adc_to_processing best practice.
 // ============================================================================
 module cdc_single_bit #(
     parameter STAGES = 3
@@ -137,7 +148,7 @@ module cdc_single_bit #(
 
     (* ASYNC_REG = "TRUE" *) reg [STAGES-1:0] sync_chain;
     
-    always @(posedge dst_clk or negedge reset_n) begin
+    always @(posedge dst_clk) begin
         if (!reset_n) begin
             sync_chain <= 0;
         end else begin
@@ -151,6 +162,7 @@ endmodule
 
 // ============================================================================
 // CDC FOR MULTI-BIT WITH HANDSHAKE
+// Uses synchronous reset to avoid metastability on reset deassertion.
 // ============================================================================
 module cdc_handshake #(
     parameter WIDTH = 32
@@ -164,6 +176,14 @@ module cdc_handshake #(
     output wire [WIDTH-1:0] dst_data,
     output wire dst_valid,
     input wire dst_ready
+`ifdef FORMAL
+    ,output wire              fv_src_busy,
+    output wire              fv_dst_ack,
+    output wire              fv_dst_req_sync,
+    output wire [1:0]        fv_src_ack_sync_chain,
+    output wire [1:0]        fv_dst_req_sync_chain,
+    output wire [WIDTH-1:0]  fv_src_data_reg_hs
+`endif
 );
 
     // Source domain
@@ -178,9 +198,18 @@ module cdc_handshake #(
     reg dst_req_sync = 0;
     (* ASYNC_REG = "TRUE" *) reg [1:0] dst_req_sync_chain = 2'b00;
     reg dst_ack = 0;
+
+`ifdef FORMAL
+    assign fv_src_busy           = src_busy;
+    assign fv_dst_ack            = dst_ack;
+    assign fv_dst_req_sync       = dst_req_sync;
+    assign fv_src_ack_sync_chain = src_ack_sync_chain;
+    assign fv_dst_req_sync_chain = dst_req_sync_chain;
+    assign fv_src_data_reg_hs    = src_data_reg;
+`endif
     
-    // Source clock domain
-    always @(posedge src_clk or negedge reset_n) begin
+    // Source clock domain — synchronous reset
+    always @(posedge src_clk) begin
         if (!reset_n) begin
             src_data_reg <= 0;
             src_busy <= 0;
@@ -200,8 +229,8 @@ module cdc_handshake #(
         end
     end
     
-    // Destination clock domain
-    always @(posedge dst_clk or negedge reset_n) begin
+    // Destination clock domain — synchronous reset
+    always @(posedge dst_clk) begin
         if (!reset_n) begin
             dst_data_reg <= 0;
             dst_valid_reg <= 0;
