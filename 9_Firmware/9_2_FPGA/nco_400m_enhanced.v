@@ -43,7 +43,8 @@ reg [31:0] phase_accum_reg;     // Stage 1 output: registered DSP48E1 P[31:0]
 reg [31:0] phase_with_offset;   // Stage 2 output: phase_accum_reg + offset
 
 // Stage 3a pipeline registers: registered LUT address + quadrant
-reg [5:0] lut_index_pipe;
+reg [5:0] lut_index_pipe_sin;
+reg [5:0] lut_index_pipe_cos;
 reg [1:0] quadrant_pipe;
 
 // Stage 3b pipeline registers: LUT output + quadrant
@@ -105,8 +106,8 @@ wire [5:0] lut_index = (quadrant_w[0] ^ quadrant_w[1]) ? ~lut_address[5:0] : lut
 // These wires are driven by lut_index_pipe (registered in Stage 3a), so the
 // combinational path is just: lut_index_pipe_reg → LUT6 (distributed RAM read)
 // This eliminates the LUT3→LUT6 two-level critical path from Build 8.
-wire [15:0] sin_abs_w = sin_lut[lut_index_pipe];
-wire [15:0] cos_abs_w = sin_lut[63 - lut_index_pipe];
+wire [15:0] sin_abs_w = sin_lut[lut_index_pipe_sin];
+wire [15:0] cos_abs_w = sin_lut[63 - lut_index_pipe_cos];
 
 // ============================================================================
 // Stage 1: Phase accumulator (DSP48E1) — accumulates FTW each cycle
@@ -265,11 +266,13 @@ end
 // ============================================================================
 always @(posedge clk_400m or negedge reset_n) begin
     if (!reset_n) begin
-        lut_index_pipe <= 6'b000000;
-        quadrant_pipe  <= 2'b00;
+        lut_index_pipe_sin <= 6'b000000;
+        lut_index_pipe_cos <= 6'b000000;
+        quadrant_pipe      <= 2'b00;
     end else if (valid_pipe[1]) begin
-        lut_index_pipe <= lut_index;
-        quadrant_pipe  <= quadrant_w;
+        lut_index_pipe_sin <= lut_index;
+        lut_index_pipe_cos <= lut_index;
+        quadrant_pipe      <= quadrant_w;
     end
 end
 

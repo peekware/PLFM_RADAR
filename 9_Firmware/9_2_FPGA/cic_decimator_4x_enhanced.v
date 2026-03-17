@@ -481,8 +481,8 @@ reg signed [COMB_WIDTH-1:0] comb_delay [0:STAGES-1][0:COMB_DELAY-1];
 
 // Enhanced control and monitoring
 reg [1:0] decimation_counter;
-reg data_valid_delayed;
-reg data_valid_comb;
+(* keep = "true", max_fanout = 4 *) reg data_valid_delayed;
+(* keep = "true", max_fanout = 4 *) reg data_valid_comb;
 reg [7:0] output_counter;
 reg [ACC_WIDTH-1:0] max_integrator_value;
 reg overflow_detected;
