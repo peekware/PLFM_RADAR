@@ -180,9 +180,11 @@ module fv_range_bin_decimator (
     end
 
     // ================================================================
-    // PROPERTY 5: Exactly OUTPUT_BINS outputs per frame
-    // When state reaches ST_DONE, exactly OUTPUT_BINS valid output
-    // pulses must have been emitted.
+    // PROPERTY 5a: Output count never exceeds OUTPUT_BINS
+    // When state reaches ST_DONE, at most OUTPUT_BINS valid output
+    // pulses have been emitted. The overflow guard in ST_PROCESS
+    // (in_bin_count >= INPUT_BINS-1 → ST_DONE) may cause early
+    // termination when start_bin is large, producing fewer outputs.
     //
     // Timing: The last range_valid_out is registered in ST_EMIT and
     // appears high on the same posedge that state transitions to
@@ -191,10 +193,22 @@ module fv_range_bin_decimator (
     // Check when $past(state) == ST_DONE (i.e. the cycle after entry)
     // so the counter has resolved.  At this point state == ST_IDLE,
     // but the counter's ST_IDLE reset is also an NBA that hasn't
-    // resolved yet, so fv_valid_out_count still reads OUTPUT_BINS.
+    // resolved yet, so fv_valid_out_count still reads its final value.
     // ================================================================
     always @(posedge clk) begin
         if (reset_n && f_past_valid && $past(state) == ST_DONE)
+            assert(fv_valid_out_count <= OUTPUT_BINS);
+    end
+
+    // ================================================================
+    // PROPERTY 5b: Exactly OUTPUT_BINS outputs when enough samples
+    // When start_bin is small enough that INPUT_BINS - start_bin >=
+    // OUTPUT_BINS * DECIMATION_FACTOR, all outputs are produced.
+    // With reduced params: 32 - start_bin >= 32, i.e. start_bin == 0.
+    // ================================================================
+    always @(posedge clk) begin
+        if (reset_n && f_past_valid && $past(state) == ST_DONE &&
+            start_bin == 10'd0)
             assert(fv_valid_out_count == OUTPUT_BINS);
     end
 
@@ -236,6 +250,16 @@ module fv_range_bin_decimator (
     always @(posedge clk) begin
         if (reset_n)
             cover(state == ST_DONE && decimation_mode == 2'b01);
+    end
+
+    // ================================================================
+    // COVER 4: Overflow guard early termination
+    // Verify the overflow guard path is reachable: ST_DONE reached
+    // with fewer than OUTPUT_BINS outputs (start_bin too large).
+    // ================================================================
+    always @(posedge clk) begin
+        if (reset_n && f_past_valid && $past(state) == ST_DONE)
+            cover(fv_valid_out_count < OUTPUT_BINS);
     end
 
 `endif // FORMAL

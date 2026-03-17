@@ -236,13 +236,8 @@ always @(posedge clk or negedge reset_n) begin
             if (range_valid_in) begin
                 in_bin_count <= in_bin_count + 1;
 
-                // Overflow guard: stop if we've consumed all input bins
-                // Prevents corruption of downstream Doppler BRAM if matched
-                // filter emits more than INPUT_BINS valid samples
-                if (in_bin_count >= INPUT_BINS - 1) begin
-                    state <= ST_DONE;
-                end else begin
-                // Mode-specific sample processing
+                // Mode-specific sample processing — always process
+                // the current sample before checking overflow
                 case (decimation_mode)
                 2'b00: begin  // Simple decimation
                     if (group_sample_count == (DECIMATION_FACTOR / 2)) begin
@@ -269,10 +264,15 @@ always @(posedge clk or negedge reset_n) begin
                     // Group complete — emit output
                     state <= ST_EMIT;
                     group_sample_count <= 4'd0;
+                end else if (in_bin_count >= INPUT_BINS - 1) begin
+                    // Overflow guard: consumed all input bins but group
+                    // is not yet complete. Stop to prevent corruption of
+                    // downstream Doppler BRAM if matched filter emits
+                    // more than INPUT_BINS valid samples.
+                    state <= ST_DONE;
                 end else begin
                     group_sample_count <= group_sample_count + 1;
                 end
-                end // else (overflow guard)
             end
         end
 
