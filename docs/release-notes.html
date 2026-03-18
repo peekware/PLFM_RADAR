@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AERIS-10 Docs | Release Notes</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container nav">
+      <a class="brand" href="index.html">AERIS-10 Docs</a>
+      <nav>
+        <a href="architecture.html">Architecture</a>
+        <a href="implementation-log.html">Implementation Log</a>
+        <a href="bring-up.html">Bring-Up</a>
+        <a href="reports.html">Reports</a>
+        <a href="release-notes.html">Release Notes</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container page">
+    <section class="hero">
+      <p class="eyebrow">Traceability</p>
+      <h1>Release Notes by Key Commit</h1>
+      <p>Milestone notes keyed to major bring-up, debug, and documentation commits.</p>
+    </section>
+
+    <section class="card" style="margin-top:0.8rem;">
+      <h2>Commit timeline</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Commit</th>
+              <th>Title</th>
+              <th>Impact</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>f6877aa</code></td>
+              <td>Phase 1 hardware bring-up prep</td>
+              <td>Added ILA/debug constraints, CDC waivers, and programming/capture scripts for hardware readiness.</td>
+            </tr>
+            <tr>
+              <td><code>12e63b7</code></td>
+              <td>ILA insertion script hardening</td>
+              <td>Fixed deferred core creation, exact-path resolution, and Vivado 2025.2 MU_CNT handling.</td>
+            </tr>
+            <tr>
+              <td><code>0ae7b40</code></td>
+              <td>TE0712/TE0701 split target</td>
+              <td>Introduced dedicated dev top, XDC, and build flow to isolate carrier-board pinout from production target.</td>
+            </tr>
+            <tr>
+              <td><code>967ce17</code></td>
+              <td>TE0713/TE0701 alternate target</td>
+              <td>Added in-stock SoM path with TE0713-specific constraints and build automation.</td>
+            </tr>
+            <tr>
+              <td><code>fcdd270</code></td>
+              <td>Initial GitHub Pages publication</td>
+              <td>Published antenna and Python simulation PDFs with static site entry point and <code>.nojekyll</code> fix.</td>
+            </tr>
+            <tr>
+              <td><code>94eed1e</code></td>
+              <td>Full docs website expansion</td>
+              <td>Introduced multi-page engineering documentation site with architecture, bring-up, implementation, and reports pages.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:0.8rem;">
+      <h2>Open in GitHub</h2>
+      <ul>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/f6877aa" target="_blank" rel="noopener">f6877aa</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/12e63b7" target="_blank" rel="noopener">12e63b7</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/0ae7b40" target="_blank" rel="noopener">0ae7b40</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/967ce17" target="_blank" rel="noopener">967ce17</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/fcdd270" target="_blank" rel="noopener">fcdd270</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/94eed1e" target="_blank" rel="noopener">94eed1e</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container"><p>Keep this page updated whenever major hardware validation milestones are merged.</p></div>
+  </footer>
+</body>
+</html>
