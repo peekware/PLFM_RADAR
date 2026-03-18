@@ -14,10 +14,15 @@
 #   3. Runs full implementation with Build 13 directives
 #   4. Generates bitstream, reports, and .ltx probe file
 #
-# ILA 0: ADC Capture          — 400 MHz (rx_inst/clk_400m)   — 9 bits
-# ILA 1: DDC Output           — 100 MHz (clk_100m_buf)       — 37 bits
-# ILA 2: Matched Filter Out   — 100 MHz (clk_100m_buf)       — 35 bits
-# ILA 3: Doppler Output       — 100 MHz (clk_100m_buf)       — 45 bits
+# ILA 0: ADC Capture          — 400 MHz (rx_inst/adc/clk_400m) — up to 9 bits
+# ILA 1: DDC Output           — 100 MHz                        — up to 37 bits
+# ILA 2: Matched Filter Ctrl  — 100 MHz                        — 4 signals
+# ILA 3: Doppler Output       — 100 MHz                        — up to 45 bits
+#
+# APPROACH: Uses get_nets with -hierarchical wildcards and get_nets -of
+# [get_pins ...] to resolve post-synthesis net names. All probe connections
+# are fault-tolerant — if a net cannot be found it is logged and skipped,
+# rather than aborting the build.
 #
 # Author: auto-generated for Jason Stone
 # Date:   2026-03-18
@@ -28,7 +33,7 @@
 # ==============================================================================
 
 set project_base   "/home/jason-stone/PLFM_RADAR_work/vivado_project"
-set synth_dcp      "${project_base}/aeris10_radar.runs/impl_1/radar_system_top.dcp"
+set synth_dcp      "${project_base}/aeris10_radar.runs/synth_1/radar_system_top.dcp"
 set synth_xdc      "${project_base}/synth_only.xdc"
 set output_dir     "${project_base}/aeris10_radar.runs/impl_ila"
 set top_module     "radar_system_top"
@@ -42,68 +47,130 @@ set run_tag        "build13_ila_${timestamp}"
 set ila_depth      4096
 set trigger_pos    512     ;# 512 pre-trigger samples
 
+# Global counter: total probes actually connected (for final summary)
+set total_probes_connected 0
+
 # ==============================================================================
-# 1. Helper procedures
+# 1. Helper procedures — fault-tolerant net resolution
 # ==============================================================================
 
-# Resolve a net with fallback wildcard patterns. Returns the net object or
-# raises an error with diagnostic info if nothing is found.
-proc resolve_net {primary_pattern args} {
-    # Try the primary pattern first
-    set nets [get_nets -quiet $primary_pattern]
-    if {[llength $nets] > 0} {
-        puts "INFO: Resolved net '$primary_pattern' -> [lindex $nets 0]"
-        return [lindex $nets 0]
-    }
-
-    # Try each fallback pattern
-    foreach fallback $args {
-        set nets [get_nets -quiet $fallback]
-        if {[llength $nets] > 0} {
-            puts "INFO: Primary '$primary_pattern' not found. Resolved via fallback '$fallback' -> [lindex $nets 0]"
-            return [lindex $nets 0]
+# Try a sequence of strategies to find a single net. Returns the net object
+# or empty string "" if nothing was found. Never errors out.
+#
+# Each element in $strategies is itself a list:
+#   { method arg }
+# where method is one of:
+#   "net"   — try exact path first (get_nets -quiet $arg), then hierarchical
+#   "pin"   — call  get_nets -quiet -of [get_pins -quiet $arg]
+#
+# Example:
+#   find_net { {net rx_inst/adc/adc_valid} {net *adc_valid*} }
+#
+proc find_net {strategies} {
+    foreach strategy $strategies {
+        set method [lindex $strategy 0]
+        set arg    [lindex $strategy 1]
+        switch $method {
+            "net" {
+                # Try exact path first (works for fully-qualified hierarchical names)
+                set result [get_nets -quiet $arg]
+                # Fall back to hierarchical search (works for leaf names and wildcards)
+                if {[llength $result] == 0} {
+                    set result [get_nets -quiet -hierarchical $arg]
+                }
+            }
+            "pin" {
+                set pins [get_pins -quiet $arg]
+                if {[llength $pins] == 0} {
+                    # Also try hierarchical pin search
+                    set pins [get_pins -quiet -hierarchical $arg]
+                }
+                if {[llength $pins] > 0} {
+                    set result [get_nets -quiet -of $pins]
+                } else {
+                    set result {}
+                }
+            }
+            default {
+                set result {}
+            }
+        }
+        if {[llength $result] > 0} {
+            # Return the first matching net
+            set chosen [lindex $result 0]
+            puts "  INFO: Resolved '$arg' ($method) -> $chosen"
+            return $chosen
         }
     }
-
-    # Nothing found — dump available nets in the hierarchy for diagnostics
-    set hier_prefix [lindex [split $primary_pattern "/"] 0]
-    puts "ERROR: Could not resolve net '$primary_pattern'"
-    puts "       Available nets under '${hier_prefix}/*' (first 40):"
-    set nearby [get_nets -quiet -hierarchical "${hier_prefix}/*"]
-    set count 0
-    foreach n $nearby {
-        puts "         $n"
-        incr count
-        if {$count >= 40} { puts "         ... (truncated)"; break }
-    }
-    error "Net resolution failed for '$primary_pattern'. See log above for nearby nets."
+    return ""
 }
 
-# Resolve a bus (vector) of nets. Returns a list of net objects.
-# pattern should contain %d which will be replaced with bit indices.
-# Example: resolve_bus "rx_inst/adc/adc_data_cmos\[%d\]" 7 0
-#          tries bits 7 down to 0
-proc resolve_bus {pattern msb lsb args} {
-    set net_list {}
-    for {set i $msb} {$i >= $lsb} {incr i -1} {
-        set bit_pattern [string map [list "%d" $i] $pattern]
-        # Build fallback list for this bit
-        set bit_fallbacks {}
-        foreach fb $args {
-            lappend bit_fallbacks [string map [list "%d" $i] $fb]
+# Try a sequence of strategies to find a bus (vector) of nets.
+# Returns a Tcl list of net objects. The list may be shorter than requested
+# if some bits were optimised away.
+#
+# Each element in $strategies is { method pattern } where pattern may contain
+# a literal '*' or a specific glob. The procedure evaluates ALL strategies
+# as a batch and picks the first one that returns >= 1 net.
+#
+proc find_bus {strategies} {
+    foreach strategy $strategies {
+        set method [lindex $strategy 0]
+        set arg    [lindex $strategy 1]
+        switch $method {
+            "net" {
+                # Try exact path first (works for fully-qualified hierarchical paths)
+                set result [get_nets -quiet $arg]
+                # Fall back to hierarchical search (leaf names, wildcards)
+                if {[llength $result] == 0} {
+                    set result [get_nets -quiet -hierarchical $arg]
+                }
+            }
+            "pin" {
+                set pins [get_pins -quiet $arg]
+                if {[llength $pins] == 0} {
+                    # Also try hierarchical pin search
+                    set pins [get_pins -quiet -hierarchical $arg]
+                }
+                if {[llength $pins] > 0} {
+                    set result [get_nets -quiet -of $pins]
+                } else {
+                    set result {}
+                }
+            }
+            default {
+                set result {}
+            }
         }
-        lappend net_list [resolve_net $bit_pattern {*}$bit_fallbacks]
+        if {[llength $result] > 0} {
+            puts "  INFO: Bus resolved via '$arg' ($method) -> [llength $result] nets"
+            return $result
+        }
     }
-    return $net_list
+    return {}
 }
 
-# Connect a list of nets to an ILA probe port, creating additional probe ports
-# as needed. The first probe port (DATA) is already created by create_debug_core.
-# probe_index: starting probe port index (0 = use existing PROBE0)
+# Connect a list of nets to the next available probe port on an ILA core.
+# If the net list is empty, logs a warning and returns the same probe index
+# (no probe port is consumed).
+#
+# ila_name:    e.g. u_ila_0
+# probe_index: current probe port index (0 for PROBE0, etc.)
+# net_list:    Tcl list of net objects to connect
+# label:       human-readable description for log messages
+#
 # Returns the next available probe index.
-proc connect_probe_nets {ila_name probe_index net_list probe_label} {
+#
+proc connect_probe {ila_name probe_index net_list label} {
+    global total_probes_connected
+
     set width [llength $net_list]
-    puts "INFO: Connecting $width nets to ${ila_name}/probe${probe_index} ($probe_label)"
+    if {$width == 0} {
+        puts "  WARNING: No nets found for '$label' — skipping probe${probe_index} on $ila_name"
+        return $probe_index
+    }
+
+    puts "  INFO: Connecting $width nets to ${ila_name}/probe${probe_index} ($label)"
 
     if {$probe_index > 0} {
         create_debug_port $ila_name probe
@@ -112,7 +179,66 @@ proc connect_probe_nets {ila_name probe_index net_list probe_label} {
     set_property port_width $width [get_debug_ports ${ila_name}/probe${probe_index}]
     connect_debug_port ${ila_name}/probe${probe_index} $net_list
 
+    incr total_probes_connected $width
     return [expr {$probe_index + 1}]
+}
+
+# Deferred ILA creation — create the debug core, set properties, connect clock,
+# and wire up all resolved probes in one shot. If no probes resolved, the ILA
+# is NOT created at all (avoids dangling probe0 error).
+#
+# ila_name:     e.g. u_ila_0
+# clk_net:      clock net object
+# probe_list:   list of {label net_list} pairs (pre-resolved)
+# depth:        ILA sample depth
+#
+# Returns the number of probe ports actually connected.
+#
+proc create_ila_deferred {ila_name clk_net probe_list depth} {
+    global total_probes_connected
+
+    # Filter to only probes that have at least 1 net
+    set valid_probes {}
+    foreach probe_entry $probe_list {
+        set label    [lindex $probe_entry 0]
+        set net_list [lindex $probe_entry 1]
+        if {[llength $net_list] > 0} {
+            lappend valid_probes [list $label $net_list]
+        } else {
+            puts "  WARNING: No nets found for '$label' on $ila_name — skipping"
+        }
+    }
+
+    if {[llength $valid_probes] == 0} {
+        puts "  WARNING: ALL probes failed for $ila_name — ILA core NOT created (avoiding dangling probe0)"
+        return 0
+    }
+
+    # Now create the debug core — we know we have at least 1 probe
+    puts "  INFO: Creating $ila_name with [llength $valid_probes] probe(s)"
+    create_debug_core $ila_name ila
+    set_property ALL_PROBE_SAME_MU    true  [get_debug_cores $ila_name]
+    set_property ALL_PROBE_SAME_MU_CNT 2    [get_debug_cores $ila_name]
+    set_property C_ADV_TRIGGER        false [get_debug_cores $ila_name]
+    set_property C_DATA_DEPTH         $depth [get_debug_cores $ila_name]
+    set_property C_EN_STRG_QUAL       true  [get_debug_cores $ila_name]
+    set_property C_INPUT_PIPE_STAGES  0     [get_debug_cores $ila_name]
+    set_property C_TRIGIN_EN          false [get_debug_cores $ila_name]
+    set_property C_TRIGOUT_EN         false [get_debug_cores $ila_name]
+
+    # Connect the clock
+    set_property port_width 1 [get_debug_ports ${ila_name}/clk]
+    connect_debug_port ${ila_name}/clk [get_nets $clk_net]
+
+    # Connect each resolved probe
+    set probe_idx 0
+    foreach probe_entry $valid_probes {
+        set label    [lindex $probe_entry 0]
+        set net_list [lindex $probe_entry 1]
+        set probe_idx [connect_probe $ila_name $probe_idx $net_list $label]
+    }
+
+    return $probe_idx
 }
 
 # ==============================================================================
@@ -142,257 +268,300 @@ puts "INFO: Reading XDC: $synth_xdc"
 read_xdc $synth_xdc
 
 # ==============================================================================
-# 3. Verify clock nets exist before inserting ILA cores
+# 3. Resolve clock nets
 # ==============================================================================
 
-puts "\n--- Verifying clock nets ---"
+puts "\n--- Resolving clock nets ---"
 
-# 400 MHz clock — BUFG output inside ADC interface
-set clk_400m_net [resolve_net \
-    "rx_inst/clk_400m" \
-    "rx_inst/adc/clk_400m" \
-    "rx_inst/ad9484_interface_400m_inst/clk_400m" \
-    "rx_inst/*/O" \
-]
-
-# 100 MHz system clock — BUFG output
-set clk_100m_net [resolve_net \
-    "clk_100m_buf" \
-    "bufg_100m/O" \
-    "clk_100m_BUFG" \
-]
-
+# 400 MHz clock — inside ADC interface (confirmed resolved to rx_inst/clk_400m)
+set clk_400m_net [find_net {
+    {net  rx_inst/clk_400m}
+    {net  rx_inst/adc/clk_400m}
+    {net  *adc*/clk_400m}
+    {net  *clk_400m*}
+}]
+if {$clk_400m_net eq ""} {
+    error "FATAL: Cannot find 400 MHz clock net. Cannot insert ILA 0."
+}
 puts "INFO: 400 MHz clock net = $clk_400m_net"
+
+# 100 MHz system clock
+set clk_100m_net [find_net {
+    {net  clk_100m_IBUF_BUFG}
+    {net  clk_100m_buf}
+    {net  clk_100m_BUFG}
+    {net  *clk_100m*}
+}]
+if {$clk_100m_net eq ""} {
+    error "FATAL: Cannot find 100 MHz clock net. Cannot insert ILA 1/2/3."
+}
 puts "INFO: 100 MHz clock net = $clk_100m_net"
 
 # ==============================================================================
 # 4. ILA 0 — ADC Capture (400 MHz domain)
 #
 # Monitors raw ADC data at the CMOS interface output.
-# 8-bit ADC data + 1-bit valid = 9 probed bits.
-# 4096 samples at 400 MHz => ~10.24 us capture window —
-# sufficient for one chirp segment observation.
+# Probes: ADC data [7:0] + ADC valid = up to 9 bits.
+# 4096 samples at 400 MHz => ~10.24 us capture window.
+#
+# Uses DEFERRED creation: probes are resolved first, ILA is only created
+# if at least one probe has nets.  This avoids dangling probe0 errors.
 # ==============================================================================
 
 puts "\n====== ILA 0: ADC Capture (400 MHz) ======"
 
-create_debug_core u_ila_0 ila
-set_property ALL_PROBE_SAME_MU    true  [get_debug_cores u_ila_0]
-set_property ALL_PROBE_SAME_MU_CNT 1    [get_debug_cores u_ila_0]
-set_property C_ADV_TRIGGER        false [get_debug_cores u_ila_0]
-set_property C_DATA_DEPTH         $ila_depth [get_debug_cores u_ila_0]
-set_property C_EN_STRG_QUAL       true  [get_debug_cores u_ila_0]
-set_property C_INPUT_PIPE_STAGES  0     [get_debug_cores u_ila_0]
-set_property C_TRIGIN_EN          false [get_debug_cores u_ila_0]
-set_property C_TRIGOUT_EN         false [get_debug_cores u_ila_0]
+# Probe 0: ADC data [7:0]
+# Post-synth register name is adc_data_400m_reg_reg (double "reg" from synthesis).
+# Bit 7 is inverted: adc_data_400m_reg_reg[7]_inv.
+# Use pin-based discovery which catches both normal and _inv variants.
+set adc_data_nets [find_bus {
+    {pin  rx_inst/adc/adc_data_400m_reg_reg[*]/Q}
+    {net  rx_inst/adc/adc_data_400m_reg_reg[*]}
+    {pin  rx_inst/adc/adc_data_400m_reg[*]/Q}
+    {net  rx_inst/adc/A[*]}
+    {pin  rx_inst/adc/adc_data_cmos_reg[*]/Q}
+    {net  rx_inst/adc/adc_data_400m[*]}
+    {net  rx_inst/adc/adc_data_cmos[*]}
+}]
 
-# Clock: 400 MHz BUFG output from ADC interface
-set_property port_width 1 [get_debug_ports u_ila_0/clk]
-connect_debug_port u_ila_0/clk [get_nets $clk_400m_net]
+# Probe 1: ADC valid
+# Net confirmed as rx_inst/adc/adc_valid
+# Pin confirmed as rx_inst/adc/adc_data_valid_400m_reg_reg/Q (double "reg")
+set adc_valid_net [find_net {
+    {net  rx_inst/adc/adc_valid}
+    {pin  rx_inst/adc/adc_data_valid_400m_reg_reg/Q}
+    {pin  rx_inst/adc/adc_valid_reg/Q}
+    {net  *adc/adc_valid*}
+}]
+if {$adc_valid_net ne ""} {
+    set adc_valid_list [list $adc_valid_net]
+} else {
+    set adc_valid_list {}
+}
 
-# Probe 0: adc_data_cmos[7:0] — raw 8-bit ADC sample from AD9484
-set adc_data_nets [resolve_bus \
-    "rx_inst/adc/adc_data_cmos\[%d\]" 7 0 \
-    "rx_inst/adc/adc_data_400m\[%d\]" \
-    "rx_inst/ad9484_interface_400m_inst/adc_data_cmos\[%d\]" \
-    "rx_inst/*/adc_data_cmos\[%d\]" \
+# Deferred creation: only create ILA if at least 1 probe resolves
+set ila0_probes [list \
+    [list "ADC data"  $adc_data_nets] \
+    [list "ADC valid" $adc_valid_list] \
 ]
-set probe_idx 0
-set probe_idx [connect_probe_nets u_ila_0 $probe_idx $adc_data_nets "ADC raw data\[7:0\]"]
-
-# Probe 1: adc_valid — data valid strobe
-set adc_valid_net [resolve_net \
-    "rx_inst/adc/adc_valid" \
-    "rx_inst/ad9484_interface_400m_inst/adc_valid" \
-    "rx_inst/*/adc_valid" \
-]
-set probe_idx [connect_probe_nets u_ila_0 $probe_idx [list $adc_valid_net] "ADC valid"]
-
-puts "INFO: ILA 0 configured — 9 probe bits on 400 MHz clock"
+set ila0_count [create_ila_deferred u_ila_0 $clk_400m_net $ila0_probes $ila_depth]
+puts "INFO: ILA 0 — $ila0_count probe ports on 400 MHz clock"
 
 # ==============================================================================
 # 5. ILA 1 — DDC Output (100 MHz domain)
 #
 # Monitors the digital down-converter output after CIC+FIR decimation.
-# 18-bit I + 18-bit Q + 1-bit valid = 37 probed bits.
-# With 4x decimation the effective sample rate is 25 MSPS,
-# so 4096 samples => ~163.8 us — covers multiple chirp periods.
+# Probes: DDC I [17:1] + DDC Q [17:1] + DDC valid = up to 35 bits.
+# Bit 0 is optimized away in synthesis.
+#
+# Uses DEFERRED creation to avoid dangling probe0 errors.
 # ==============================================================================
 
 puts "\n====== ILA 1: DDC Output (100 MHz) ======"
 
-create_debug_core u_ila_1 ila
-set_property ALL_PROBE_SAME_MU    true  [get_debug_cores u_ila_1]
-set_property ALL_PROBE_SAME_MU_CNT 1    [get_debug_cores u_ila_1]
-set_property C_ADV_TRIGGER        false [get_debug_cores u_ila_1]
-set_property C_DATA_DEPTH         $ila_depth [get_debug_cores u_ila_1]
-set_property C_EN_STRG_QUAL       true  [get_debug_cores u_ila_1]
-set_property C_INPUT_PIPE_STAGES  0     [get_debug_cores u_ila_1]
-set_property C_TRIGIN_EN          false [get_debug_cores u_ila_1]
-set_property C_TRIGOUT_EN         false [get_debug_cores u_ila_1]
+# Probe 0: ddc_out_i — DDC I-channel baseband output
+# Nets confirmed as rx_inst/ddc/ddc_out_i[1] through [17] (bit 0 optimized away)
+# Use exact path WITHOUT -hierarchical, then fall back to pin-based and hierarchical
+set ddc_i_nets [find_bus {
+    {net  rx_inst/ddc/ddc_out_i[*]}
+    {pin  rx_inst/ddc/ddc_out_i_reg[*]/Q}
+    {net  *ddc/ddc_out_i[*]}
+}]
 
-# Clock: 100 MHz system clock
-set_property port_width 1 [get_debug_ports u_ila_1/clk]
-connect_debug_port u_ila_1/clk [get_nets $clk_100m_net]
+# Probe 1: ddc_out_q — DDC Q-channel baseband output
+# Nets confirmed as rx_inst/ddc/ddc_out_q[1] through [17] (bit 0 optimized away)
+set ddc_q_nets [find_bus {
+    {net  rx_inst/ddc/ddc_out_q[*]}
+    {pin  rx_inst/ddc/ddc_out_q_reg[*]/Q}
+    {net  *ddc/ddc_out_q[*]}
+}]
 
-# Probe 0: ddc_out_i[17:0] — DDC I-channel baseband output
-set ddc_i_nets [resolve_bus \
-    "rx_inst/ddc_out_i\[%d\]" 17 0 \
-    "rx_inst/ddc_400m_inst/ddc_out_i\[%d\]" \
-    "rx_inst/*/ddc_out_i\[%d\]" \
+# Probe 2: DDC output valid
+# Confirmed nets: rx_inst/ddc_valid_q, rx_inst/ddc/baseband_valid_q
+set ddc_valid_net [find_net {
+    {net  rx_inst/ddc_valid_q}
+    {net  rx_inst/ddc/baseband_valid_q}
+    {net  rx_inst/ddc/fir_valid}
+    {pin  rx_inst/ddc/baseband_valid_q_reg/Q}
+    {net  *ddc*valid*}
+}]
+if {$ddc_valid_net ne ""} {
+    set ddc_valid_list [list $ddc_valid_net]
+} else {
+    set ddc_valid_list {}
+}
+
+# Deferred creation: only create ILA if at least 1 probe resolves
+set ila1_probes [list \
+    [list "DDC I"     $ddc_i_nets] \
+    [list "DDC Q"     $ddc_q_nets] \
+    [list "DDC valid" $ddc_valid_list] \
 ]
-set probe_idx 0
-set probe_idx [connect_probe_nets u_ila_1 $probe_idx $ddc_i_nets "DDC I\[17:0\]"]
-
-# Probe 1: ddc_out_q[17:0] — DDC Q-channel baseband output
-set ddc_q_nets [resolve_bus \
-    "rx_inst/ddc_out_q\[%d\]" 17 0 \
-    "rx_inst/ddc_400m_inst/ddc_out_q\[%d\]" \
-    "rx_inst/*/ddc_out_q\[%d\]" \
-]
-set probe_idx [connect_probe_nets u_ila_1 $probe_idx $ddc_q_nets "DDC Q\[17:0\]"]
-
-# Probe 2: ddc_valid_i — DDC output valid strobe (I path; Q valid assumed coincident)
-set ddc_valid_net [resolve_net \
-    "rx_inst/ddc_valid_i" \
-    "rx_inst/ddc_400m_inst/ddc_valid_i" \
-    "rx_inst/*/ddc_valid_i" \
-    "rx_inst/ddc_valid" \
-]
-set probe_idx [connect_probe_nets u_ila_1 $probe_idx [list $ddc_valid_net] "DDC valid"]
-
-puts "INFO: ILA 1 configured — 37 probe bits on 100 MHz clock"
+set ila1_count [create_ila_deferred u_ila_1 $clk_100m_net $ila1_probes $ila_depth]
+puts "INFO: ILA 1 — $ila1_count probe ports on 100 MHz clock"
 
 # ==============================================================================
-# 6. ILA 2 — Matched Filter Output (100 MHz domain)
+# 6. ILA 2 — Matched Filter Control (100 MHz domain)
 #
-# Monitors the pulse-compression matched filter output.
-# 16-bit I + 16-bit Q + 1-bit valid + 2-bit segment index = 35 probed bits.
-# This allows verifying correct chirp segment correlation and range profile.
+# Reduced probe set: only control/status signals that are confirmed to exist
+# in the post-synthesis netlist. Data nets (pc_i_w, pc_q_w) do NOT exist
+# post-synth due to hierarchy flattening.
+#
+# Probes: range_profile_valid + mf_valid_out + segment_request[1:0] = 4 bits.
+#
+# Uses DEFERRED creation to avoid dangling probe0 errors.
 # ==============================================================================
 
-puts "\n====== ILA 2: Matched Filter Output (100 MHz) ======"
+puts "\n====== ILA 2: Matched Filter Control (100 MHz) ======"
 
-create_debug_core u_ila_2 ila
-set_property ALL_PROBE_SAME_MU    true  [get_debug_cores u_ila_2]
-set_property ALL_PROBE_SAME_MU_CNT 1    [get_debug_cores u_ila_2]
-set_property C_ADV_TRIGGER        false [get_debug_cores u_ila_2]
-set_property C_DATA_DEPTH         $ila_depth [get_debug_cores u_ila_2]
-set_property C_EN_STRG_QUAL       true  [get_debug_cores u_ila_2]
-set_property C_INPUT_PIPE_STAGES  0     [get_debug_cores u_ila_2]
-set_property C_TRIGIN_EN          false [get_debug_cores u_ila_2]
-set_property C_TRIGOUT_EN         false [get_debug_cores u_ila_2]
+# Probe 0: range_profile_valid
+# Confirmed nets: rx_inst/mf_dual/range_profile_valid,
+#                 rx_inst/mf_dual/m_f_p_c/range_profile_valid,
+#                 rx_inst/range_decim/range_profile_valid
+set rpv_net [find_net {
+    {net  rx_inst/mf_dual/range_profile_valid}
+    {net  rx_inst/mf_dual/m_f_p_c/range_profile_valid}
+    {net  rx_inst/range_decim/range_profile_valid}
+    {pin  rx_inst/mf_dual/range_profile_valid_reg/Q}
+    {net  *mf_dual/range_profile_valid*}
+}]
+if {$rpv_net ne ""} {
+    set rpv_list [list $rpv_net]
+} else {
+    set rpv_list {}
+}
 
-# Clock: 100 MHz system clock (shared with ILA 1)
-set_property port_width 1 [get_debug_ports u_ila_2/clk]
-connect_debug_port u_ila_2/clk [get_nets $clk_100m_net]
+# Probe 1: mf_valid_out (internal MF output valid)
+# Confirmed nets: rx_inst/mf_dual/m_f_p_c/mf_inst/mf_valid_out,
+#                 rx_inst/mf_dual/m_f_p_c/mf_valid_in
+set mfv_net [find_net {
+    {net  rx_inst/mf_dual/m_f_p_c/mf_inst/mf_valid_out}
+    {net  rx_inst/mf_dual/m_f_p_c/mf_valid_in}
+    {pin  rx_inst/mf_dual/m_f_p_c/mf_inst/mf_valid_out_reg/Q}
+    {net  *mf_inst/mf_valid_out*}
+}]
+if {$mfv_net ne ""} {
+    set mfv_list [list $mfv_net]
+} else {
+    set mfv_list {}
+}
 
-# Probe 0: pc_i_w[15:0] — matched filter range-compressed I output
-set mf_i_nets [resolve_bus \
-    "rx_inst/mf_dual/pc_i_w\[%d\]" 15 0 \
-    "rx_inst/matched_filter_multi_segment_inst/pc_i_w\[%d\]" \
-    "rx_inst/*/pc_i_w\[%d\]" \
+# Probe 2: segment_request[1:0] (confirmed in net dump)
+set seg_nets [find_bus {
+    {pin  rx_inst/mf_dual/segment_request_reg[*]/Q}
+    {net  rx_inst/mf_dual/segment_request[*]}
+    {net  *mf_dual/segment_request[*]}
+}]
+
+# Deferred creation: only create ILA if at least 1 probe resolves
+set ila2_probes [list \
+    [list "MF range_profile_valid" $rpv_list] \
+    [list "MF mf_valid_out"        $mfv_list] \
+    [list "MF segment_request"     $seg_nets] \
 ]
-set probe_idx 0
-set probe_idx [connect_probe_nets u_ila_2 $probe_idx $mf_i_nets "MF I\[15:0\]"]
-
-# Probe 1: pc_q_w[15:0] — matched filter range-compressed Q output
-set mf_q_nets [resolve_bus \
-    "rx_inst/mf_dual/pc_q_w\[%d\]" 15 0 \
-    "rx_inst/matched_filter_multi_segment_inst/pc_q_w\[%d\]" \
-    "rx_inst/*/pc_q_w\[%d\]" \
-]
-set probe_idx [connect_probe_nets u_ila_2 $probe_idx $mf_q_nets "MF Q\[15:0\]"]
-
-# Probe 2: pc_valid_w — matched filter output valid
-set mf_valid_net [resolve_net \
-    "rx_inst/mf_dual/pc_valid_w" \
-    "rx_inst/matched_filter_multi_segment_inst/pc_valid_w" \
-    "rx_inst/*/pc_valid_w" \
-]
-set probe_idx [connect_probe_nets u_ila_2 $probe_idx [list $mf_valid_net] "MF valid"]
-
-# Probe 3: segment_request[1:0] — chirp segment being correlated (0-3)
-set seg_nets [resolve_bus \
-    "rx_inst/mf_dual/segment_request\[%d\]" 1 0 \
-    "rx_inst/matched_filter_multi_segment_inst/segment_request\[%d\]" \
-    "rx_inst/*/segment_request\[%d\]" \
-]
-set probe_idx [connect_probe_nets u_ila_2 $probe_idx $seg_nets "MF segment\[1:0\]"]
-
-puts "INFO: ILA 2 configured — 35 probe bits on 100 MHz clock"
+set ila2_count [create_ila_deferred u_ila_2 $clk_100m_net $ila2_probes $ila_depth]
+puts "INFO: ILA 2 — $ila2_count probe ports on 100 MHz clock (control signals only)"
 
 # ==============================================================================
 # 7. ILA 3 — Doppler Output (100 MHz domain)
 #
 # Monitors the Doppler processor output (post-FFT).
-# 32-bit spectrum + 1-bit valid + 5-bit Doppler bin + 6-bit range bin
-# + 1-bit frame sync = 45 probed bits.
-# Allows verification of the range-Doppler map generation.
+# Probes: doppler_data OBUF [31:0] + doppler_valid + doppler_bin [4:0]
+#         + range_bin [5:0] + new_frame_pulse = up to 45 bits.
+# Uses _OBUF net variants which are guaranteed to exist at top-level I/O.
+#
+# Uses DEFERRED creation to avoid dangling probe0 errors.
 # ==============================================================================
 
 puts "\n====== ILA 3: Doppler Output (100 MHz) ======"
 
-create_debug_core u_ila_3 ila
-set_property ALL_PROBE_SAME_MU    true  [get_debug_cores u_ila_3]
-set_property ALL_PROBE_SAME_MU_CNT 1    [get_debug_cores u_ila_3]
-set_property C_ADV_TRIGGER        false [get_debug_cores u_ila_3]
-set_property C_DATA_DEPTH         $ila_depth [get_debug_cores u_ila_3]
-set_property C_EN_STRG_QUAL       true  [get_debug_cores u_ila_3]
-set_property C_INPUT_PIPE_STAGES  0     [get_debug_cores u_ila_3]
-set_property C_TRIGIN_EN          false [get_debug_cores u_ila_3]
-set_property C_TRIGOUT_EN         false [get_debug_cores u_ila_3]
+# Probe 0: Doppler output data [31:0]
+# Use _OBUF variants (top-level output buffer nets) which are guaranteed
+# to exist. Fall back to register Q pins if OBUFs are not present.
+set dop_data_nets [find_bus {
+    {net  dbg_doppler_data_OBUF[*]}
+    {pin  rx_inst/doppler_proc/doppler_output_reg[*]/Q}
+    {net  *doppler_data_OBUF[*]}
+    {net  *doppler_output[*]}
+}]
 
-# Clock: 100 MHz system clock (shared with ILA 1, ILA 2)
-set_property port_width 1 [get_debug_ports u_ila_3/clk]
-connect_debug_port u_ila_3/clk [get_nets $clk_100m_net]
+# Probe 1: Doppler valid
+set dop_valid_net [find_net {
+    {net  dbg_doppler_valid_OBUF}
+    {net  rx_inst/doppler_proc/dbg_doppler_valid_OBUF}
+    {pin  rx_inst/doppler_proc/doppler_valid_reg/Q}
+    {net  *doppler_valid*}
+}]
+if {$dop_valid_net ne ""} {
+    set dop_valid_list [list $dop_valid_net]
+} else {
+    set dop_valid_list {}
+}
 
-# Probe 0: doppler_output[31:0] — Doppler FFT magnitude/spectrum output
-set dop_out_nets [resolve_bus \
-    "rx_inst/doppler_proc/doppler_output\[%d\]" 31 0 \
-    "rx_inst/doppler_processor_inst/doppler_output\[%d\]" \
-    "rx_inst/*/doppler_output\[%d\]" \
+# Probe 2: Doppler bin [4:0]
+set dop_bin_nets [find_bus {
+    {pin  rx_inst/doppler_proc/doppler_bin_reg[*]/Q}
+    {net  rx_inst/doppler_bin_reg[*]}
+    {net  *doppler_bin_OBUF[*]}
+    {net  *doppler_bin[*]}
+}]
+
+# Probe 3: Range bin [5:0]
+set rng_bin_nets [find_bus {
+    {pin  rx_inst/doppler_proc/range_bin_reg[*]/Q}
+    {net  rx_inst/range_bin_reg[*]}
+    {net  *range_bin_OBUF[*]}
+    {net  *range_bin[*]}
+}]
+
+# Probe 4: new_frame_pulse — frame synchronization
+set frame_net [find_net {
+    {net  rx_inst/new_frame_pulse}
+    {net  *new_frame_pulse*}
+    {pin  rx_inst/new_frame_pulse_reg/Q}
+    {net  *frame_pulse*}
+}]
+if {$frame_net ne ""} {
+    set frame_list [list $frame_net]
+} else {
+    set frame_list {}
+}
+
+# Deferred creation: only create ILA if at least 1 probe resolves
+set ila3_probes [list \
+    [list "Doppler data"      $dop_data_nets] \
+    [list "Doppler valid"     $dop_valid_list] \
+    [list "Doppler bin"       $dop_bin_nets] \
+    [list "Range bin"         $rng_bin_nets] \
+    [list "Frame sync pulse"  $frame_list] \
 ]
-set probe_idx 0
-set probe_idx [connect_probe_nets u_ila_3 $probe_idx $dop_out_nets "Doppler spectrum\[31:0\]"]
-
-# Probe 1: doppler_valid — Doppler output valid strobe
-set dop_valid_net [resolve_net \
-    "rx_inst/doppler_proc/doppler_valid" \
-    "rx_inst/doppler_processor_inst/doppler_valid" \
-    "rx_inst/*/doppler_valid" \
-]
-set probe_idx [connect_probe_nets u_ila_3 $probe_idx [list $dop_valid_net] "Doppler valid"]
-
-# Probe 2: doppler_bin[4:0] — Doppler frequency bin index (0-31)
-set dop_bin_nets [resolve_bus \
-    "rx_inst/doppler_proc/doppler_bin\[%d\]" 4 0 \
-    "rx_inst/doppler_processor_inst/doppler_bin\[%d\]" \
-    "rx_inst/*/doppler_bin\[%d\]" \
-]
-set probe_idx [connect_probe_nets u_ila_3 $probe_idx $dop_bin_nets "Doppler bin\[4:0\]"]
-
-# Probe 3: range_bin[5:0] — range bin index (0-63)
-set rng_bin_nets [resolve_bus \
-    "rx_inst/doppler_proc/range_bin\[%d\]" 5 0 \
-    "rx_inst/doppler_processor_inst/range_bin\[%d\]" \
-    "rx_inst/*/range_bin\[%d\]" \
-]
-set probe_idx [connect_probe_nets u_ila_3 $probe_idx $rng_bin_nets "Range bin\[5:0\]"]
-
-# Probe 4: new_frame_pulse — top-level frame synchronization pulse
-set frame_net [resolve_net \
-    "rx_inst/new_frame_pulse" \
-    "rx_inst/radar_receiver_final_inst/new_frame_pulse" \
-    "rx_inst/*/new_frame_pulse" \
-    "new_frame_pulse" \
-]
-set probe_idx [connect_probe_nets u_ila_3 $probe_idx [list $frame_net] "Frame sync pulse"]
-
-puts "INFO: ILA 3 configured — 45 probe bits on 100 MHz clock"
+set ila3_count [create_ila_deferred u_ila_3 $clk_100m_net $ila3_probes $ila_depth]
+puts "INFO: ILA 3 — $ila3_count probe ports on 100 MHz clock"
 
 # ==============================================================================
-# 8. Implement the modified design
+# 8. Pre-implementation validation
+# ==============================================================================
+
+puts "\n--- Pre-implementation ILA summary ---"
+puts "INFO: Total probe bits connected across all ILAs: $total_probes_connected"
+
+# Sanity check: make sure we connected SOMETHING
+if {$total_probes_connected == 0} {
+    error "FATAL: No probe nets were connected to any ILA. Check net names against the post-synth netlist."
+}
+
+# List all debug cores for the log
+set created_cores [get_debug_cores -quiet]
+if {[llength $created_cores] > 0} {
+    foreach core $created_cores {
+        puts "  DEBUG CORE: $core"
+    }
+} else {
+    puts "  WARNING: No debug cores found (this should not happen if total_probes_connected > 0)"
+}
+
+# ==============================================================================
+# 9. Implement the modified design (Build 13 directives)
 # ==============================================================================
 
 puts "\n======================================================================"
@@ -444,7 +613,7 @@ write_checkpoint -force $final_dcp
 puts "INFO: Final checkpoint: $final_dcp"
 
 # ==============================================================================
-# 9. Generate reports for comparison with Build 13
+# 10. Generate reports for comparison with Build 13
 # ==============================================================================
 
 puts "\n======================================================================"
@@ -495,7 +664,7 @@ report_debug_core \
 puts "INFO: All reports written to $output_dir"
 
 # ==============================================================================
-# 10. Write debug probes file (.ltx) for Vivado Hardware Manager
+# 11. Write debug probes file (.ltx) for Vivado Hardware Manager
 # ==============================================================================
 
 puts "\n--- Writing debug probes .ltx file ---"
@@ -508,7 +677,7 @@ puts "INFO: Debug probes file: $ltx_file"
 file copy -force $ltx_file "${output_dir}/debug_nets.ltx"
 
 # ==============================================================================
-# 11. Generate bitstream
+# 12. Generate bitstream
 # ==============================================================================
 
 puts "\n======================================================================"
@@ -532,7 +701,7 @@ write_cfgmem -force \
 puts "INFO: SPI flash image: ${output_dir}/${top_module}.bin"
 
 # ==============================================================================
-# 12. Final summary
+# 13. Final summary
 # ==============================================================================
 
 puts "\n======================================================================"
@@ -545,11 +714,28 @@ puts " Bitstream:         $bitstream_file"
 puts " Debug probes:      $ltx_file"
 puts " Run tag:           $run_tag"
 puts ""
-puts " ILA Cores Inserted:"
-puts "   u_ila_0 : ADC Capture       (400 MHz, 9 bits,  depth=$ila_depth)"
-puts "   u_ila_1 : DDC Output        (100 MHz, 37 bits, depth=$ila_depth)"
-puts "   u_ila_2 : Matched Filter    (100 MHz, 35 bits, depth=$ila_depth)"
-puts "   u_ila_3 : Doppler Output    (100 MHz, 45 bits, depth=$ila_depth)"
+puts " ILA Cores Inserted (only cores with resolved probes):"
+if {$ila0_count > 0} {
+    puts "   u_ila_0 : ADC Capture       (400 MHz, depth=$ila_depth, ${ila0_count} probes)"
+} else {
+    puts "   u_ila_0 : ADC Capture       — SKIPPED (no probes resolved)"
+}
+if {$ila1_count > 0} {
+    puts "   u_ila_1 : DDC Output        (100 MHz, depth=$ila_depth, ${ila1_count} probes)"
+} else {
+    puts "   u_ila_1 : DDC Output        — SKIPPED (no probes resolved)"
+}
+if {$ila2_count > 0} {
+    puts "   u_ila_2 : MF Control        (100 MHz, depth=$ila_depth, ${ila2_count} probes)"
+} else {
+    puts "   u_ila_2 : MF Control        — SKIPPED (no probes resolved)"
+}
+if {$ila3_count > 0} {
+    puts "   u_ila_3 : Doppler Output    (100 MHz, depth=$ila_depth, ${ila3_count} probes)"
+} else {
+    puts "   u_ila_3 : Doppler Output    — SKIPPED (no probes resolved)"
+}
+puts "   Total probe bits connected: $total_probes_connected"
 puts ""
 puts " Compare these reports against Build 13 baseline:"
 puts "   - timing_summary_final.rpt  (WNS/TNS/WHS/THS)"
