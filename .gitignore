@@ -35,3 +35,25 @@ rmc_autoscan.csv
 # Python
 __pycache__/
 *.pyc
+
+# Local organization/archival folders (not part of repo source)
+10_docs/
+
+# Local simulation workspaces and generated outputs
+5_Simulations/generated/
+5_Simulations/aeris10_antenna_sim.py
+5_Simulations/aeris10_radar_sim.py
+
+# Local FPGA report dumps and scratch constraints
+9_Firmware/9_2_FPGA/reports/
+9_Firmware/9_2_FPGA/synth_only.xdc
+
+# Local timing closure report snapshots
+build6_reports/
+build7_reports/
+build8_reports/
+build9_reports/
+build10_reports/
+build11_reports/
+build12_reports/
+build13_reports/
