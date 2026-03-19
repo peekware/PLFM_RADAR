@@ -31,6 +31,14 @@
       <h2>Recent milestone timeline</h2>
       <div class="timeline">
         <article>
+          <h3>E2E integration test + RTL fixes: mixer sequencing, USB data-pending, receiver wiring (0773001)</h3>
+          <p class="muted">New end-to-end testbench (tb_system_e2e.v) with 46 checks across 12 groups covering reset, TX, safety, RX, USB R/W, CDC, beam scanning, reset recovery, stream control, latency budgets, and watchdog. RTL fixes discovered via E2E: chirp controller TX/RX mixer enables now mutually exclusive by FSM state; USB write FSM gains doppler/cfar data_pending sticky flags with stream-control reset default changed to range-only (3'b001); receiver gets STM32 toggle signal inputs and dynamic frame detection. USB unit tests 21/22/56 updated for data_pending architecture. Regression script PASS/FAIL parsing hardened. 19/19 FPGA, 20/20 MCU.</p>
+        </article>
+        <article>
+          <h3>FFT engine optimizations: 4-cycle butterfly + barrel-shift twiddle (a3e1996)</h3>
+          <p class="muted">Merged SHIFT state into WRITE stage for a 5&rarr;4 cycle butterfly pipeline (20% throughput improvement). Replaced multiplier-based twiddle factor index computation with variable left-shift (barrel shift), freeing one DSP48 multiplier. Both changes verified via FFT testbench.</p>
+        </article>
+        <article>
           <h3>Gap 2: GUI Settings &mdash; runtime chirp timing, stream control, status readback (7cdfa48)</h3>
           <p class="muted">Radar chirp timing parameters (long/short chirp, listen, guard cycles, chirps-per-elevation) are now runtime-configurable via 6 new USB opcodes (0x10-0x15). Stream control (opcode 0x04) gates the USB write FSM per-stream. CFAR threshold (opcode 0x03) is wired to actual comparison logic (was hardcoded). Status readback (opcode 0xFF) returns a 7-word packet with all current settings. CDC handled via per-bit 2-stage synchronizers (stream control) and toggle CDC (status request). 4 new testbench groups added. 18/18 FPGA, 20/20 MCU.</p>
         </article>
@@ -73,7 +81,7 @@
       <article class="card">
         <h2>Codebase quality and verification upgrades</h2>
         <ul>
-          <li>FPGA regression: 18/18 passing suites covering matched filter, Doppler, CIC, CDC, USB (with read path), FFT, NCO, FIR, range decimator, mode controller, and system-top integration.</li>
+          <li>FPGA regression: 19/19 passing suites covering matched filter, Doppler, CIC, CDC, USB (with read path), FFT, NCO, FIR, range decimator, mode controller, system-top integration, and system E2E.</li>
           <li>MCU regression: 20/20 passing tests (15 bug-fix + 5 Gap-3 safety tests).</li>
           <li>Architectural gaps 2, 3, 4, 5, 7 closed with full test coverage. Gaps 1 and 6 deferred to post-bring-up.</li>
           <li>USB host-to-FPGA command path fully wired: read FSM, toggle CDC, command decode for mode/trigger/CFAR/stream control. GUI settings (chirp timing, stream gating, status readback) fully operational.</li>

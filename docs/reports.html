@@ -57,7 +57,7 @@
             <tr><td>Production-target XDC</td><td><code>9_Firmware/9_2_FPGA/constraints/xc7a200t_fbg484.xdc</code></td><td>Constraint source of truth for the production FPGA target</td><td>Tracked and validated after Build 16 cleanup port</td></tr>
             <tr><td>FPGA programming flow</td><td><code>9_Firmware/9_2_FPGA/scripts/program_fpga.tcl</code></td><td>Programs the device and reports DONE / INIT_COMPLETE / probes presence</td><td>Primary operator-facing programming script</td></tr>
             <tr><td>Debug probe insertion flow</td><td><code>9_Firmware/9_2_FPGA/scripts/insert_ila_probes.tcl</code></td><td>Used when generating or refreshing debug-capable images</td><td>Keep matched with the selected debug bitstream</td></tr>
-            <tr><td>FPGA regression runner</td><td><code>9_Firmware/9_2_FPGA/run_regression.sh</code></td><td>Pre-arrival regression evidence for the tracked FPGA baseline</td><td>18 / 18 passing on the current tracked branch</td></tr>
+            <tr><td>FPGA regression runner</td><td><code>9_Firmware/9_2_FPGA/run_regression.sh</code></td><td>Pre-arrival regression evidence for the tracked FPGA baseline</td><td>19 / 19 passing on the current tracked branch (includes E2E test)</td></tr>
             <tr><td>MCU regression harness</td><td><code>9_Firmware/9_1_Microcontroller/tests/Makefile</code></td><td>Pre-arrival firmware regression evidence before flashing hardware</td><td>20 / 20 passing on the current tracked branch</td></tr>
             <tr><td>Bring-up logging macros</td><td><code>9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/diag_log.h</code></td><td>Defines the main first-power-on log vocabulary used over USART3</td><td>Observation-only instrumentation layer</td></tr>
             <tr><td>Board-day worksheet</td><td><code>docs/board-day-worksheet.html</code></td><td>Record pass/fail, measurements, and blockers during first sessions</td><td>Use with this page and the bring-up plan</td></tr>
@@ -113,7 +113,8 @@
       <ul>
         <li>The current routed production-target baseline is <strong>Build 20 (v0.1.3-build20)</strong> with all timing constraints met and 7x setup slack improvement over Build 18.</li>
         <li>Architectural gaps 2 (GUI Settings), 3 (Safety), 4 (USB Read Path), 5 (BRAM Reset), and 7 (MMCM) are closed. Gaps 1 (CFAR) and 6 (CDC-15) remain for post-bring-up.</li>
-        <li>FPGA regression: 18/18 pass. MCU regression: 20/20 pass (15 bug-fix + 5 Gap-3 safety).</li>
+        <li>FPGA regression: 19/19 pass (includes new E2E integration test). MCU regression: 20/20 pass (15 bug-fix + 5 Gap-3 safety).</li>
+        <li>FFT engine optimized: 4-cycle butterfly (20% throughput gain) + barrel-shift twiddle index (frees 1 DSP48). Pending Vivado build verification.</li>
         <li>Detailed Build 20 engineering reports are on the remote Vivado host at <code>~/PLFM_RADAR_work/vivado_project/reports_build20/</code>.</li>
         <li>The artifact inventory above is intended to stabilize day-0 execution even when detailed internal engineering reports stay outside the public docs site.</li>
       </ul>
