@@ -1,7 +1,7 @@
 ################################################################################
 # Makefile -- MCU firmware unit test harness for AERIS-10
 #
-# Builds and runs host-side (macOS) tests for the 10 discovered firmware bugs.
+# Builds and runs host-side (macOS) tests for all discovered firmware bugs.
 # Uses mock HAL + spy/recording pattern to test real firmware code without
 # hardware.
 #
@@ -40,20 +40,27 @@ TESTS_WITH_REAL := test_bug1_timed_sync_init_ordering \
                    test_bug4_phase_shift_before_check \
                    test_bug5_fine_phase_gpio_only \
                    test_bug9_platform_ops_null \
-                   test_bug10_spi_cs_not_toggled
+                   test_bug10_spi_cs_not_toggled \
+                   test_bug15_htim3_dangling_extern
 
 # Tests that only need mocks (extracted patterns / static analysis)
 TESTS_MOCK_ONLY := test_bug2_ad9523_double_setup \
                    test_bug6_timer_variable_collision \
                    test_bug7_gpio_pin_conflict \
-                   test_bug8_uart_commented_out
+                   test_bug8_uart_commented_out \
+                   test_bug14_diag_section_args
+
+# Tests that are standalone (no mocks needed, pure logic)
+TESTS_STANDALONE := test_bug12_pa_cal_loop_inverted \
+                    test_bug13_dac2_adc_buffer_mismatch
 
 # Tests that need platform_noos_stm32.o + mocks
 TESTS_WITH_PLATFORM := test_bug11_platform_spi_transmit_only
 
-ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY) $(TESTS_WITH_PLATFORM)
+ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY) $(TESTS_STANDALONE) $(TESTS_WITH_PLATFORM)
 
-.PHONY: all build test clean $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11)
+.PHONY: all build test clean \
+        $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11 bug12 bug13 bug14 bug15)
 
 all: build test
 
@@ -61,7 +68,7 @@ build: $(ALL_TESTS)
 
 test: build
 	@echo "==============================================="
-	@echo "  Running all 11 bug tests..."
+	@echo "  Running all $(words $(ALL_TESTS)) bug tests..."
 	@echo "==============================================="
 	@pass=0; fail=0; \
 	for t in $(ALL_TESTS); do \
@@ -112,6 +119,16 @@ test_bug7_gpio_pin_conflict: test_bug7_gpio_pin_conflict.c $(MOCK_OBJS)
 test_bug8_uart_commented_out: test_bug8_uart_commented_out.c
 	$(CC) $(CFLAGS) -I. $< -o $@
 
+test_bug14_diag_section_args: test_bug14_diag_section_args.c $(MOCK_OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(MOCK_OBJS) -o $@
+
+# Standalone tests (pure logic, no mocks)
+test_bug12_pa_cal_loop_inverted: test_bug12_pa_cal_loop_inverted.c
+	$(CC) $(CFLAGS) $< -lm -o $@
+
+test_bug13_dac2_adc_buffer_mismatch: test_bug13_dac2_adc_buffer_mismatch.c
+	$(CC) $(CFLAGS) $< -lm -o $@
+
 # Tests that need platform_noos_stm32.o + mocks
 $(TESTS_WITH_PLATFORM): %: %.c $(MOCK_OBJS) $(PLATFORM_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(MOCK_OBJS) $(PLATFORM_OBJ) -o $@
@@ -150,6 +167,18 @@ test_bug10: test_bug10_spi_cs_not_toggled
 
 test_bug11: test_bug11_platform_spi_transmit_only
 	./test_bug11_platform_spi_transmit_only
+
+test_bug12: test_bug12_pa_cal_loop_inverted
+	./test_bug12_pa_cal_loop_inverted
+
+test_bug13: test_bug13_dac2_adc_buffer_mismatch
+	./test_bug13_dac2_adc_buffer_mismatch
+
+test_bug14: test_bug14_diag_section_args
+	./test_bug14_diag_section_args
+
+test_bug15: test_bug15_htim3_dangling_extern
+	./test_bug15_htim3_dangling_extern
 
 # --- Clean ---
 

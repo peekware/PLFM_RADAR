@@ -581,7 +581,7 @@ int ADF4382A_SetPhaseShift(ADF4382A_Manager *manager, uint16_t tx_phase_ps, uint
     // Convert phase shift to duty cycle and apply
     if (tx_phase_ps != manager->tx_phase_shift_ps) {
         uint16_t duty_cycle = phase_ps_to_duty_cycle(tx_phase_ps);
-        DIAG_WARN("LO", "TX phase: %d ps -> duty_cycle=%d/%d (SIMPLIFIED -- not real PWM)",
+        DIAG("LO", "TX phase: %d ps -> duty_cycle=%d/%d (TIM3 CH2 PWM)",
                   tx_phase_ps, duty_cycle, DELADJ_MAX_DUTY_CYCLE);
         ADF4382A_SetFinePhaseShift(manager, 0, duty_cycle); // 0 = TX device
         manager->tx_phase_shift_ps = tx_phase_ps;
@@ -589,7 +589,7 @@ int ADF4382A_SetPhaseShift(ADF4382A_Manager *manager, uint16_t tx_phase_ps, uint
 
     if (rx_phase_ps != manager->rx_phase_shift_ps) {
         uint16_t duty_cycle = phase_ps_to_duty_cycle(rx_phase_ps);
-        DIAG_WARN("LO", "RX phase: %d ps -> duty_cycle=%d/%d (SIMPLIFIED -- not real PWM)",
+        DIAG("LO", "RX phase: %d ps -> duty_cycle=%d/%d (TIM3 CH3 PWM)",
                   rx_phase_ps, duty_cycle, DELADJ_MAX_DUTY_CYCLE);
         ADF4382A_SetFinePhaseShift(manager, 1, duty_cycle); // 1 = RX device
         manager->rx_phase_shift_ps = rx_phase_ps;

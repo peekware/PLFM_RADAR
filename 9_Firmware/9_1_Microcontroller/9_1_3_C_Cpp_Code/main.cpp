@@ -114,6 +114,7 @@ SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi4;
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim3;  // B15 fix: DELADJ PWM timer (CH2=TX, CH3=RX)
 
 UART_HandleTypeDef huart5;
 UART_HandleTypeDef huart3;
@@ -261,6 +262,7 @@ void PeriphCommonClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM3_Init(void);  // B15 fix: DELADJ PWM timer init
 static void MX_I2C1_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_I2C3_Init(void);
@@ -341,7 +343,7 @@ extern "C" {
 }
 
 void systemPowerUpSequence() {
-    DIAG_SECTION("PWR", "systemPowerUpSequence");
+    DIAG_SECTION("PWR: systemPowerUpSequence");
     uint8_t msg[] = "Starting Power Up Sequence...\r\n";
     HAL_UART_Transmit(&huart3, msg, sizeof(msg)-1, 1000);
 
@@ -386,7 +388,7 @@ void systemPowerUpSequence() {
 }
 
 void systemPowerDownSequence() {
-    DIAG_SECTION("PWR", "systemPowerDownSequence");
+    DIAG_SECTION("PWR: systemPowerDownSequence");
     uint8_t msg[] = "Starting Power Down Sequence...\r\n";
     HAL_UART_Transmit(&huart3, msg, sizeof(msg)-1, 1000);
 
@@ -733,7 +735,7 @@ SystemError_t checkSystemHealth(void) {
 
 // Error recovery function
 void attemptErrorRecovery(SystemError_t error) {
-    DIAG_SECTION("SYS", "attemptErrorRecovery");
+    DIAG_SECTION("SYS: attemptErrorRecovery");
     DIAG("SYS", "Attempting recovery from error code %d", error);
     char recovery_msg[80];
     snprintf(recovery_msg, sizeof(recovery_msg),
@@ -1320,6 +1322,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM1_Init();
+  MX_TIM3_Init();  // B15 fix: init DELADJ PWM timer before LO manager uses it
   MX_I2C1_Init();
   MX_I2C2_Init();
   MX_I2C3_Init();
@@ -1603,9 +1606,7 @@ int main(void)
             // - SYNC pin connected for triggering
 
             // When ready to synchronize:
-            /* [BUG ANNOTATION] TriggerTimedSync is a no-op -- it only prints
-             * messages but does not actually toggle any sync pin or register. */
-            DIAG_WARN("LO", "[BUG] Calling TriggerTimedSync -- known NO-OP, does nothing hardware-related");
+            DIAG("LO", "Calling TriggerTimedSync to pulse sw_sync on both PLLs");
             ADF4382A_TriggerTimedSync(&lo_manager);
             // At this point, the SYNC pin can be toggled to trigger synchronization
         } else {
@@ -1745,7 +1746,7 @@ int main(void)
   /************RF Power Amplifier Powering up sequence************/
   /***************************************************************/
   if(PowerAmplifier){
-	  DIAG_SECTION("PA", "RF Power Amplifier power-up sequence (PowerAmplifier=true)");
+	  DIAG_SECTION("PA: RF Power Amplifier power-up sequence");
 	  /* Initialize DACs */
 	  /* DAC1: Address 0b1001000 = 0x48 */
 	  DIAG("PA", "Initializing DAC1 (I2C1, addr=0x48, 8-bit)");
@@ -1851,7 +1852,7 @@ int main(void)
 	          DAC5578_WriteAndUpdateChannelValue(&hdac1, channel, DAC_val);
 	          adc1_readings[channel] = ADS7830_Measure_SingleEnded(&hadc1, channel);
 	          Idq_reading[channel] = (3.3/255) * adc1_readings[channel] / (50 * 0.005);
-	      } while (DAC_val > 38 && abs(Idq_reading[channel] - 1.680) < 0.2); // Fixed logic
+	      } while (DAC_val > 38 && abs(Idq_reading[channel] - 1.680) > 0.2); // B12 fix: loop while FAR from target
 	      DIAG("PA", "  DAC1 ch%d calibrated: DAC_val=%d Idq=%.3fA iters=%d",
 	           channel, DAC_val, Idq_reading[channel], safety_counter);
 	  }
@@ -1869,9 +1870,9 @@ int main(void)
 	          }
 	          DAC_val = DAC_val - 4;
 	          DAC5578_WriteAndUpdateChannelValue(&hdac2, channel, DAC_val);
-	          adc1_readings[channel] = ADS7830_Measure_SingleEnded(&hadc2, channel);
+	          adc2_readings[channel] = ADS7830_Measure_SingleEnded(&hadc2, channel); // B13 fix: was adc1_readings
 	          Idq_reading[channel+8] = (3.3/255) * adc2_readings[channel] / (50 * 0.005);
-	      } while (DAC_val > 38 && abs(Idq_reading[channel+8] - 1.680) < 0.2); // Fixed logic
+	      } while (DAC_val > 38 && abs(Idq_reading[channel+8] - 1.680) > 0.2); // B12 fix: loop while FAR from target
 	      DIAG("PA", "  DAC2 ch%d calibrated: DAC_val=%d Idq=%.3fA iters=%d",
 	           channel, DAC_val, Idq_reading[channel+8], safety_counter);
 	  }
@@ -2385,6 +2386,63 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 2 */
 
+}
+
+/**
+  * @brief TIM3 Initialization Function — DELADJ PWM for ADF4382A phase shift
+  *        CH2 = TX DELADJ, CH3 = RX DELADJ
+  *        Period (ARR) = 999 → 1000 counts matching DELADJ_MAX_DUTY_CYCLE
+  *        Prescaler = 71 → 1 MHz tick @ 72 MHz APB1 → 1 kHz PWM frequency
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+  /* B15 fix: provide htim3 definition so adf4382a_manager.c extern resolves */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 71;                          // 72 MHz / (71+1) = 1 MHz tick
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;                             // ARR = 999 → 1000 counts = DELADJ_MAX_DUTY_CYCLE
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;                                // Start with 0% duty cycle
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  // Configure CH2 (TX DELADJ)
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  // Configure CH3 (RX DELADJ)
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /**
