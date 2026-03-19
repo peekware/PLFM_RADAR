@@ -31,6 +31,10 @@
       <h2>Recent milestone timeline</h2>
       <div class="timeline">
         <article>
+          <h3>Gap 2: GUI Settings &mdash; runtime chirp timing, stream control, status readback (7cdfa48)</h3>
+          <p class="muted">Radar chirp timing parameters (long/short chirp, listen, guard cycles, chirps-per-elevation) are now runtime-configurable via 6 new USB opcodes (0x10-0x15). Stream control (opcode 0x04) gates the USB write FSM per-stream. CFAR threshold (opcode 0x03) is wired to actual comparison logic (was hardcoded). Status readback (opcode 0xFF) returns a 7-word packet with all current settings. CDC handled via per-bit 2-stage synchronizers (stream control) and toggle CDC (status request). 4 new testbench groups added. 18/18 FPGA, 20/20 MCU.</p>
+        </article>
+        <article>
           <h3>Gap 4: USB Read Path wired with toggle CDC (e5d1b3c)</h3>
           <p class="muted">FT601 read FSM cmd_* outputs connected through toggle CDC to clk_100m command decode registers in radar_system_top.v. Host can now set radar mode, trigger chirps, set CFAR threshold, and control data streaming via USB. 3 new testbench groups (55 total checks). 18/18 FPGA regression.</p>
         </article>
@@ -71,8 +75,8 @@
         <ul>
           <li>FPGA regression: 18/18 passing suites covering matched filter, Doppler, CIC, CDC, USB (with read path), FFT, NCO, FIR, range decimator, mode controller, and system-top integration.</li>
           <li>MCU regression: 20/20 passing tests (15 bug-fix + 5 Gap-3 safety tests).</li>
-          <li>Architectural gaps 3, 4, 5, 7 closed with full test coverage. Gaps 1, 2, 6 deferred to post-bring-up or pre-tuning.</li>
-          <li>USB host-to-FPGA command path fully wired: read FSM, toggle CDC, command decode for mode/trigger/CFAR/stream control.</li>
+          <li>Architectural gaps 2, 3, 4, 5, 7 closed with full test coverage. Gaps 1 and 6 deferred to post-bring-up.</li>
+          <li>USB host-to-FPGA command path fully wired: read FSM, toggle CDC, command decode for mode/trigger/CFAR/stream control. GUI settings (chirp timing, stream gating, status readback) fully operational.</li>
           <li>Safety architecture: IWDG watchdog, emergency stop PA cutoff, temperature guard, IDQ re-read, state ordering.</li>
         </ul>
       </article>

@@ -40,6 +40,11 @@
           </thead>
           <tbody>
             <tr>
+              <td><code>7cdfa48</code></td>
+              <td>Gap 2 GUI Settings: runtime chirp timing, stream control gating, status readback</td>
+              <td>Runtime-configurable chirp timing (6 new opcodes 0x10-0x15), stream control gating (opcode 0x04 now gates USB write FSM), CFAR threshold wiring (opcode 0x03 replaces hardcoded value), status readback (opcode 0xFF returns 7-word packet). 4 new TB test groups. 18/18 FPGA, 20/20 MCU regression.</td>
+            </tr>
+            <tr>
               <td><code>e5d1b3c</code></td>
               <td>Gap 4 USB Read Path: host-to-FPGA command path with toggle CDC</td>
               <td>Wired FT601 read FSM cmd_* outputs through toggle CDC to clk_100m command decode registers. Host can now set radar mode, trigger chirps, set CFAR threshold, and control data streaming. 3 new TB test groups (55 checks). 18/18 FPGA regression.</td>
@@ -114,7 +119,7 @@
             <tr><td>5</td><td>BRAM Async Reset</td><td>Done (c87dce0)</td></tr>
             <tr><td>7</td><td>400 MHz MMCM</td><td>Done (c6103b3, Build 20)</td></tr>
             <tr><td>4</td><td>USB Read Path</td><td>Done (e5d1b3c)</td></tr>
-            <tr><td>2</td><td>GUI Settings</td><td>Next</td></tr>
+            <tr><td>2</td><td>GUI Settings</td><td>Done (7cdfa48)</td></tr>
             <tr><td>6</td><td>CDC-15 USB Buses</td><td>Post-bring-up</td></tr>
             <tr><td>1</td><td>CFAR Real Implementation</td><td>Post-bring-up</td></tr>
           </tbody>
@@ -125,6 +130,7 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Open in GitHub</h2>
       <ul>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/7cdfa48" target="_blank" rel="noopener">7cdfa48</a> Gap 2 GUI Settings</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/e5d1b3c" target="_blank" rel="noopener">e5d1b3c</a> Gap 4 USB Read Path</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/c6103b3" target="_blank" rel="noopener">c6103b3</a> Gap 7 MMCM + CREG (v0.1.3-build20)</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/f3bbf77" target="_blank" rel="noopener">f3bbf77</a> Gap 3 Safety Architecture</li>
