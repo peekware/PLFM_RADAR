@@ -40,24 +40,34 @@
           </thead>
           <tbody>
             <tr>
-              <td><code>2763b4b</code></td>
-              <td>CFAR sequential fix and Build 15 analysis capture</td>
-              <td>Replaced the clocked-block CFAR blocking assignment with sequential logic and published the Build 15 timing/DRC/methodology analysis baseline.</td>
+              <td><code>e5d1b3c</code></td>
+              <td>Gap 4 USB Read Path: host-to-FPGA command path with toggle CDC</td>
+              <td>Wired FT601 read FSM cmd_* outputs through toggle CDC to clk_100m command decode registers. Host can now set radar mode, trigger chirps, set CFAR threshold, and control data streaming. 3 new TB test groups (55 checks). 18/18 FPGA regression.</td>
             </tr>
             <tr>
-              <td><code>3fa26c9</code></td>
-              <td>USB range profile wiring completed</td>
-              <td>Removed the Doppler placeholder from the USB range path and propagated real matched-filter range data through the receiver/top-level interfaces.</td>
+              <td><code>c6103b3</code> <strong>v0.1.3-build20</strong></td>
+              <td>Gap 7 MMCM jitter cleaner + CIC CREG pipeline + XDC clock-name fix</td>
+              <td>Added 400 MHz MMCM for ADC clock jitter cleaning, CIC comb DSP48E1 CREG pipeline, and fixed XDC conflicting generated clock. Build 20: WNS +0.426 ns (7x improvement over Build 18). All timing met.</td>
             </tr>
             <tr>
-              <td><code>f4ff271</code></td>
-              <td>Matched-filter regression repair</td>
-              <td>Corrected golden-case <code>$readmemh</code> paths so the matched-filter regression returned to 40/40 passing.</td>
+              <td><code>f3bbf77</code></td>
+              <td>Gap 3 Safety Architecture</td>
+              <td>IWDG watchdog, Emergency_Stop PA rail cutoff, temperature max guard, periodic IDQ re-read, emergency state ordering. 5 new MCU tests, 20/20 pass.</td>
             </tr>
             <tr>
-              <td><code>463ebef</code></td>
-              <td>CIC pipeline staging and regression runner</td>
-              <td>Added CIC comb pipeline staging, simulation guards, and an FPGA regression runner to preserve timing while tightening verification.</td>
+              <td><code>c87dce0</code></td>
+              <td>Gap 5 BRAM async reset fix</td>
+              <td>Fixed chirp memory loader BRAM async reset to use synchronous reset pattern per Xilinx UG901 guidelines.</td>
+            </tr>
+            <tr>
+              <td><code>3b7afba</code> <strong>v0.1.2-build18</strong></td>
+              <td>Build 18 production build</td>
+              <td>Production baseline: WNS +0.062 ns, WHS +0.059 ns. 6,088 LUTs, 8,946 FFs, 16 BRAM, 140 DSP48E1, 0.631 W.</td>
+            </tr>
+            <tr>
+              <td><code>ed6f79c</code> <strong>v0.1.1-build17</strong></td>
+              <td>FIR DSP48 pipelining + matched filter BRAM migration</td>
+              <td>Build 17 production build with DSP48 pipelining improvements.</td>
             </tr>
             <tr>
               <td><code>c466021</code></td>
@@ -85,25 +95,44 @@
     </section>
 
     <section class="card" style="margin-top:0.8rem;">
-      <h2>Uncommitted validated work</h2>
+      <h2>Tagged releases</h2>
       <ul>
-        <li>Build 16 remote production-XDC cleanup has been validated in the remote Vivado workspace but is not yet represented by a git commit.</li>
-        <li>The remote-only pass removed XDCB-5 warnings, reduced the large TIMING-18 bucket to a single <code>ft601_txe</code> methodology residue, and preserved timing at WNS +0.058 ns, WHS +0.068 ns, WPWS +0.684 ns.</li>
-        <li>The surviving <code>ft601_txe</code> item currently behaves like a methodology residue on an async status-observation path rather than a proven unconstrained functional FT601 interface.</li>
+        <li><strong>v0.1.3-build20</strong> (c6103b3) &mdash; Current production baseline. WNS +0.426 ns, all timing met. Includes Gaps 3, 5, 7.</li>
+        <li><strong>v0.1.2-build18</strong> (3b7afba) &mdash; Prior production baseline. WNS +0.062 ns.</li>
+        <li><strong>v0.1.1-build17</strong> (ed6f79c) &mdash; FIR DSP48 + BRAM migration build.</li>
+        <li><strong>v0.1.0-bringup</strong> &mdash; Initial bring-up tag.</li>
       </ul>
+    </section>
+
+    <section class="card" style="margin-top:0.8rem;">
+      <h2>Architectural gap status</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Gap</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>3</td><td>Safety Architecture</td><td>Done (f3bbf77)</td></tr>
+            <tr><td>5</td><td>BRAM Async Reset</td><td>Done (c87dce0)</td></tr>
+            <tr><td>7</td><td>400 MHz MMCM</td><td>Done (c6103b3, Build 20)</td></tr>
+            <tr><td>4</td><td>USB Read Path</td><td>Done (e5d1b3c)</td></tr>
+            <tr><td>2</td><td>GUI Settings</td><td>Next</td></tr>
+            <tr><td>6</td><td>CDC-15 USB Buses</td><td>Post-bring-up</td></tr>
+            <tr><td>1</td><td>CFAR Real Implementation</td><td>Post-bring-up</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card" style="margin-top:0.8rem;">
       <h2>Open in GitHub</h2>
       <ul>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/2763b4b" target="_blank" rel="noopener">2763b4b</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/3fa26c9" target="_blank" rel="noopener">3fa26c9</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/f4ff271" target="_blank" rel="noopener">f4ff271</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/463ebef" target="_blank" rel="noopener">463ebef</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/c466021" target="_blank" rel="noopener">c466021</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/49c9aa2" target="_blank" rel="noopener">49c9aa2</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/3b32f67" target="_blank" rel="noopener">3b32f67</a></li>
-        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/3979693" target="_blank" rel="noopener">3979693</a></li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/e5d1b3c" target="_blank" rel="noopener">e5d1b3c</a> Gap 4 USB Read Path</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/c6103b3" target="_blank" rel="noopener">c6103b3</a> Gap 7 MMCM + CREG (v0.1.3-build20)</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/f3bbf77" target="_blank" rel="noopener">f3bbf77</a> Gap 3 Safety Architecture</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/c87dce0" target="_blank" rel="noopener">c87dce0</a> Gap 5 BRAM Reset</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/c466021" target="_blank" rel="noopener">c466021</a> Firmware bugs B12-B17</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/49c9aa2" target="_blank" rel="noopener">49c9aa2</a> SPI + FPGA timing</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/3b32f67" target="_blank" rel="noopener">3b32f67</a> ADF4382A SPI</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/3979693" target="_blank" rel="noopener">3979693</a> Initial 8-bug closure</li>
       </ul>
     </section>
   </main>

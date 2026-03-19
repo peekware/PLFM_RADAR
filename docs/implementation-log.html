@@ -31,28 +31,36 @@
       <h2>Recent milestone timeline</h2>
       <div class="timeline">
         <article>
-          <h3>Build 16 XDC cleanup validated on production target</h3>
-          <p class="muted">Remote production XDC pass eliminated XDCB-5 warnings, collapsed the large TIMING-18 bucket to a single ft601_txe residue, and preserved timing at WNS +0.058 ns, WHS +0.068 ns, WPWS +0.684 ns.</p>
+          <h3>Gap 4: USB Read Path wired with toggle CDC (e5d1b3c)</h3>
+          <p class="muted">FT601 read FSM cmd_* outputs connected through toggle CDC to clk_100m command decode registers in radar_system_top.v. Host can now set radar mode, trigger chirps, set CFAR threshold, and control data streaming via USB. 3 new testbench groups (55 total checks). 18/18 FPGA regression.</p>
         </article>
         <article>
-          <h3>Build 15 timing-clean integration baseline established</h3>
-          <p class="muted">Production-target implementation completed with all timing constraints met after USB range-profile wiring and the CFAR sequential-assignment fix.</p>
+          <h3>Build 20 tagged v0.1.3-build20 &mdash; new production baseline (c6103b3)</h3>
+          <p class="muted">WNS improved 7x to +0.426 ns (from +0.062 ns in Build 18). Includes 400 MHz MMCM jitter cleaner, CIC comb DSP48E1 CREG pipeline, and XDC clock-name fix. All timing constraints met. 6,092 LUTs (4.5%), 9,024 FFs (3.4%), 16 BRAM (4.4%), 140 DSP48E1 (18.9%), 0.730 W.</p>
         </article>
         <article>
-          <h3>USB range profile path wired to matched-filter output</h3>
-          <p class="muted">The top-level Doppler placeholder was removed from the USB range-profile path and replaced with the real matched-filter range output propagated through the receiver chain.</p>
+          <h3>Build 19 timing failure root-caused and fixed</h3>
+          <p class="muted">Build 19 had WNS -0.011 ns due to conflicting XDC create_generated_clock preventing false-path application on CDC paths. Fixed by removing the conflicting constraint and using Vivado auto-generated clk_mmcm_out0.</p>
+        </article>
+        <article>
+          <h3>Gap 3: Safety Architecture closed (f3bbf77)</h3>
+          <p class="muted">Added IWDG watchdog configuration, Emergency_Stop PA rail cutoff, temperature max guard, periodic IDQ re-read, and emergency state ordering. 5 new MCU tests, 20/20 MCU regression pass.</p>
+        </article>
+        <article>
+          <h3>Gap 5: BRAM async reset fixed (c87dce0)</h3>
+          <p class="muted">Chirp memory loader BRAM async reset converted to synchronous reset pattern per Xilinx UG901 guidelines. Prevents BRAM inference failures on production target.</p>
+        </article>
+        <article>
+          <h3>Build 18 tagged v0.1.2-build18 &mdash; prior production baseline</h3>
+          <p class="muted">WNS +0.062 ns, WHS +0.059 ns. 6,088 LUTs, 8,946 FFs, 16 BRAM, 140 DSP48E1, 0.631 W. All timing met.</p>
         </article>
         <article>
           <h3>Firmware bug sweep closed with regression coverage</h3>
-          <p class="muted">All 17 audited MCU firmware bugs were fixed, regression-tested, and pushed, including LO init ordering, SPI chip-select handling, PA calibration logic, TIM3 PWM bring-up, and stale diagnostic mismatches.</p>
+          <p class="muted">All 17 audited MCU firmware bugs were fixed, regression-tested, and pushed, including LO init ordering, SPI chip-select handling, PA calibration logic, TIM3 PWM bring-up, and stale diagnostic mismatches. 20/20 MCU tests pass.</p>
         </article>
         <article>
           <h3>FPGA timing/resource cleanup phase completed</h3>
           <p class="muted">Chirp BRAM migration, Doppler DSP48 pipelining, CIC pipeline staging, matched-filter regression repair, and full FPGA regression brought the active baseline to 18/18 passing tests.</p>
-        </article>
-        <article>
-          <h3>Build 13 frozen as earlier hardware candidate</h3>
-          <p class="muted">Historical milestone retained for traceability: WNS +0.311 ns, TNS 0.000, WHS +0.060, THS 0.000 on the production target before the later DSP and integration work.</p>
         </article>
       </div>
     </section>
@@ -61,19 +69,21 @@
       <article class="card">
         <h2>Codebase quality and verification upgrades</h2>
         <ul>
-          <li>Added comprehensive DIAG instrumentation across MCU bring-up, LO, PA, USB, and safety paths before executing the bug-fix phase.</li>
-          <li>Built an STM32 HAL/mock regression harness and closed the audited firmware bug list with MCU regression passing.</li>
-          <li>Ran full FPGA regression with 18/18 passing suites, including matched filter, Doppler, CIC, CDC, USB, and system-top coverage.</li>
-          <li>Migrated the chirp LUT path toward BRAM, added DSP48 and CIC pipeline staging, and validated that the active FPGA baseline still meets timing.</li>
+          <li>FPGA regression: 18/18 passing suites covering matched filter, Doppler, CIC, CDC, USB (with read path), FFT, NCO, FIR, range decimator, mode controller, and system-top integration.</li>
+          <li>MCU regression: 20/20 passing tests (15 bug-fix + 5 Gap-3 safety tests).</li>
+          <li>Architectural gaps 3, 4, 5, 7 closed with full test coverage. Gaps 1, 2, 6 deferred to post-bring-up or pre-tuning.</li>
+          <li>USB host-to-FPGA command path fully wired: read FSM, toggle CDC, command decode for mode/trigger/CFAR/stream control.</li>
+          <li>Safety architecture: IWDG watchdog, emergency stop PA cutoff, temperature guard, IDQ re-read, state ordering.</li>
         </ul>
       </article>
       <article class="card">
-        <h2>Debug and infrastructure improvements</h2>
+        <h2>Build history and timing improvements</h2>
         <ul>
-          <li>Completed Build 15 production-target analysis with timing, power, route, DRC, methodology, and CDC evidence captured in the internal engineering reports.</li>
-          <li>Validated a remote-only Build 16 XDC cleanup pass that removed XDCB-5, reduced TIMING-18 to a single ft601_txe methodology residue, and preserved post-route timing.</li>
-          <li>Kept separate Trenz development targets while prioritizing the in-stock TE0713 path for practical hardware execution.</li>
-          <li>Preserved remote Vivado baselines so timing-clean builds can be compared before and after constraint-only experiments.</li>
+          <li><strong>Build 20 (v0.1.3-build20)</strong>: Current production baseline. WNS +0.426 ns, WHS +0.058 ns. 400 MHz MMCM + CIC CREG pipeline. 0.730 W.</li>
+          <li><strong>Build 19</strong>: Failed (WNS -0.011 ns). Root cause: conflicting XDC generated clock prevented false-path application.</li>
+          <li><strong>Build 18 (v0.1.2-build18)</strong>: Prior baseline. WNS +0.062 ns, WHS +0.059 ns. 0.631 W.</li>
+          <li><strong>Build 17 (v0.1.1-build17)</strong>: FIR DSP48 pipelining + matched filter BRAM migration.</li>
+          <li>Remote Vivado build infrastructure on Ubuntu 24.04 with Vivado 2025.2, targeting XC7A200T-2FBG484I.</li>
         </ul>
       </article>
     </section>

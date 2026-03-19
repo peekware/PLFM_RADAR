@@ -34,9 +34,10 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Current FPGA implementation status</h2>
       <ul>
-        <li>Build 15 is the current detailed analysis baseline for the production XC7A200T target and completed with all timing constraints met.</li>
-        <li>Build 16 was validated in the remote Vivado workspace as a constraint-cleanup pass: XDCB-5 warnings were removed, the large TIMING-18 bucket collapsed to a single <code>ft601_txe</code> methodology residue, and routed timing remained clean at WNS +0.058 ns, WHS +0.068 ns, WPWS +0.684 ns.</li>
-        <li>The remaining <code>ft601_txe</code> methodology item currently behaves like an async-status-observation residue rather than a proven unconstrained functional FT601 path.</li>
+        <li><strong>Build 20 (v0.1.3-build20)</strong> is the current production baseline for the XC7A200T target. All timing constraints met: WNS +0.426 ns, WHS +0.058 ns, WPWS +0.361 ns.</li>
+        <li>Utilization: 6,092 LUTs (4.5%), 9,024 FFs (3.4%), 16 BRAM (4.4%), 140 DSP48E1 (18.9%), 0.730 W total power.</li>
+        <li>Key improvements over Build 18: 400 MHz MMCM jitter cleaner, CIC comb DSP48E1 CREG pipeline, XDC clock-name fix. Setup slack improved 7x.</li>
+        <li>Build 20 reports are available on the remote Vivado host at <code>~/PLFM_RADAR_work/vivado_project/reports_build20/</code>.</li>
       </ul>
     </section>
 
@@ -57,7 +58,7 @@
             <tr><td>FPGA programming flow</td><td><code>9_Firmware/9_2_FPGA/scripts/program_fpga.tcl</code></td><td>Programs the device and reports DONE / INIT_COMPLETE / probes presence</td><td>Primary operator-facing programming script</td></tr>
             <tr><td>Debug probe insertion flow</td><td><code>9_Firmware/9_2_FPGA/scripts/insert_ila_probes.tcl</code></td><td>Used when generating or refreshing debug-capable images</td><td>Keep matched with the selected debug bitstream</td></tr>
             <tr><td>FPGA regression runner</td><td><code>9_Firmware/9_2_FPGA/run_regression.sh</code></td><td>Pre-arrival regression evidence for the tracked FPGA baseline</td><td>18 / 18 passing on the current tracked branch</td></tr>
-            <tr><td>MCU regression harness</td><td><code>9_Firmware/9_1_Microcontroller/tests/Makefile</code></td><td>Pre-arrival firmware regression evidence before flashing hardware</td><td>15 / 15 passing on the current tracked branch</td></tr>
+            <tr><td>MCU regression harness</td><td><code>9_Firmware/9_1_Microcontroller/tests/Makefile</code></td><td>Pre-arrival firmware regression evidence before flashing hardware</td><td>20 / 20 passing on the current tracked branch</td></tr>
             <tr><td>Bring-up logging macros</td><td><code>9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/diag_log.h</code></td><td>Defines the main first-power-on log vocabulary used over USART3</td><td>Observation-only instrumentation layer</td></tr>
             <tr><td>Board-day worksheet</td><td><code>docs/board-day-worksheet.html</code></td><td>Record pass/fail, measurements, and blockers during first sessions</td><td>Use with this page and the bring-up plan</td></tr>
             <tr><td>Bring-up execution plan</td><td><code>docs/bring-up.html</code></td><td>Operator checklist, abort criteria, observability targets, and open risks</td><td>Primary readiness document</td></tr>
@@ -91,9 +92,9 @@
 
     <section class="card" style="margin-top:0.8rem;">
       <h2>FPGA implementation analysis</h2>
-      <p><span class="chip">Status: Current engineering baseline</span></p>
-      <p class="muted">Primary detailed write-up: internal Build 15 implementation analysis captured timing, power, route status, DRC, methodology, CDC, and utilization for the production-target design after USB range wiring and CFAR cleanup.</p>
-      <p class="muted">Follow-on Build 16 remote validation focused on production XDC cleanup only and confirmed no timing regression while reducing methodology noise substantially.</p>
+      <p><span class="chip">Status: Current engineering baseline &mdash; Build 20 (v0.1.3-build20)</span></p>
+      <p class="muted">Build 20 is the current production baseline. Full timing, utilization, power, DRC, methodology, CDC, and route reports are available on the remote Vivado host. Setup slack improved 7x from Build 18 (+0.062 ns to +0.426 ns) via MMCM jitter cleaner, CIC CREG pipeline, and XDC clock-name fix.</p>
+      <p class="muted">Build 18 (v0.1.2-build18) retained as prior reference. Build 19 failed timing (WNS -0.011 ns) due to conflicting XDC generated clock, root-caused and fixed in Build 20.</p>
     </section>
 
     <section class="card" style="margin-top:0.8rem;">
@@ -110,10 +111,11 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Report Currency Notice</h2>
       <ul>
-        <li>The current routed production-target baseline is Build 15, with Build 16 used as a remote-only XDC cleanup validation pass.</li>
-        <li>The latest public simulation PDF should be interpreted alongside the implementation log and release notes for the most accurate state of firmware bug closure and FPGA integration readiness.</li>
-        <li>Detailed Build 15 and Build 16 engineering notes currently live in internal working reports and remote Vivado artifacts rather than this public docs directory.</li>
-        <li>The artifact inventory above is intended to stabilize day-0 execution even when the detailed internal engineering reports stay outside the public docs site.</li>
+        <li>The current routed production-target baseline is <strong>Build 20 (v0.1.3-build20)</strong> with all timing constraints met and 7x setup slack improvement over Build 18.</li>
+        <li>Architectural gaps 3 (Safety), 4 (USB Read Path), 5 (BRAM Reset), and 7 (MMCM) are closed. Gaps 1 (CFAR), 2 (GUI), and 6 (CDC-15) remain for post-bring-up or pre-tuning.</li>
+        <li>FPGA regression: 18/18 pass. MCU regression: 20/20 pass (15 bug-fix + 5 Gap-3 safety).</li>
+        <li>Detailed Build 20 engineering reports are on the remote Vivado host at <code>~/PLFM_RADAR_work/vivado_project/reports_build20/</code>.</li>
+        <li>The artifact inventory above is intended to stabilize day-0 execution even when detailed internal engineering reports stay outside the public docs site.</li>
       </ul>
     </section>
 
