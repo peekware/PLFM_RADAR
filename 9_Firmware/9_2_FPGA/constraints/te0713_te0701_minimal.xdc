@@ -23,9 +23,9 @@ set_property IOSTANDARD LVCMOS15 [get_ports {clk_100m}]
 
 # Status/output IO standards
 # These outputs are exported to TE0701 FMC LA lines (not onboard LEDs).
-# Assumption: FMC VADJ/VCCIO16 is set for 2.5V signaling.
-set_property IOSTANDARD LVCMOS25 [get_ports {user_led[*]}]
-set_property IOSTANDARD LVCMOS25 [get_ports {system_status[*]}]
+# Bank 16 VCCO = VIOTB on TE0701, set to 3.3V for FT601 compatibility.
+set_property IOSTANDARD LVCMOS33 [get_ports {user_led[*]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {system_status[*]}]
 
 # Clock constraint (TE0713 FIFO0CLK source observed as 50 MHz)
 create_clock -name clk_100m -period 20.000 [get_ports {clk_100m}]
