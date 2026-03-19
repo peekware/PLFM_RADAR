@@ -471,12 +471,12 @@ module tb_matched_filter_processing_chain;
         $display("\n--- Test Group 10: Golden Reference - DC Autocorrelation (Case 1) ---");
         apply_reset;
 
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_i_case1.hex", gold_sig_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_q_case1.hex", gold_sig_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_i_case1.hex", gold_ref_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_q_case1.hex", gold_ref_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_i_case1.hex", gold_out_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_q_case1.hex", gold_out_q);
+        $readmemh("tb/mf_golden_sig_i_case1.hex", gold_sig_i);
+        $readmemh("tb/mf_golden_sig_q_case1.hex", gold_sig_q);
+        $readmemh("tb/mf_golden_ref_i_case1.hex", gold_ref_i);
+        $readmemh("tb/mf_golden_ref_q_case1.hex", gold_ref_q);
+        $readmemh("tb/mf_golden_out_i_case1.hex", gold_out_i);
+        $readmemh("tb/mf_golden_out_q_case1.hex", gold_out_q);
 
         find_golden_peak;
         $display("  Golden expected peak at bin %0d, magnitude %0d", gold_peak_bin, gold_peak_abs);
@@ -502,12 +502,12 @@ module tb_matched_filter_processing_chain;
         $display("\n--- Test Group 11: Golden Reference - Tone Autocorrelation (Case 2) ---");
         apply_reset;
 
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_i_case2.hex", gold_sig_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_q_case2.hex", gold_sig_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_i_case2.hex", gold_ref_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_q_case2.hex", gold_ref_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_i_case2.hex", gold_out_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_q_case2.hex", gold_out_q);
+        $readmemh("tb/mf_golden_sig_i_case2.hex", gold_sig_i);
+        $readmemh("tb/mf_golden_sig_q_case2.hex", gold_sig_q);
+        $readmemh("tb/mf_golden_ref_i_case2.hex", gold_ref_i);
+        $readmemh("tb/mf_golden_ref_q_case2.hex", gold_ref_q);
+        $readmemh("tb/mf_golden_out_i_case2.hex", gold_out_i);
+        $readmemh("tb/mf_golden_out_q_case2.hex", gold_out_q);
 
         find_golden_peak;
         $display("  Golden expected peak at bin %0d, magnitude %0d", gold_peak_bin, gold_peak_abs);
@@ -531,12 +531,12 @@ module tb_matched_filter_processing_chain;
         $display("\n--- Test Group 12: Golden Reference - Impulse Autocorrelation (Case 4) ---");
         apply_reset;
 
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_i_case4.hex", gold_sig_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_sig_q_case4.hex", gold_sig_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_i_case4.hex", gold_ref_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_ref_q_case4.hex", gold_ref_q);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_i_case4.hex", gold_out_i);
-        $readmemh("9_Firmware/9_2_FPGA/tb/mf_golden_out_q_case4.hex", gold_out_q);
+        $readmemh("tb/mf_golden_sig_i_case4.hex", gold_sig_i);
+        $readmemh("tb/mf_golden_sig_q_case4.hex", gold_sig_q);
+        $readmemh("tb/mf_golden_ref_i_case4.hex", gold_ref_i);
+        $readmemh("tb/mf_golden_ref_q_case4.hex", gold_ref_q);
+        $readmemh("tb/mf_golden_out_i_case4.hex", gold_out_i);
+        $readmemh("tb/mf_golden_out_q_case4.hex", gold_out_q);
 
         find_golden_peak;
         $display("  Golden expected peak at bin %0d, magnitude %0d", gold_peak_bin, gold_peak_abs);
