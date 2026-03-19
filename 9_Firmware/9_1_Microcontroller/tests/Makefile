@@ -1,7 +1,7 @@
 ################################################################################
 # Makefile -- MCU firmware unit test harness for AERIS-10
 #
-# Builds and runs host-side (macOS) tests for the 8 discovered firmware bugs.
+# Builds and runs host-side (macOS) tests for the 10 discovered firmware bugs.
 # Uses mock HAL + spy/recording pattern to test real firmware code without
 # hardware.
 #
@@ -34,7 +34,9 @@ REAL_OBJ  := adf4382a_manager.o
 TESTS_WITH_REAL := test_bug1_timed_sync_init_ordering \
                    test_bug3_timed_sync_noop \
                    test_bug4_phase_shift_before_check \
-                   test_bug5_fine_phase_gpio_only
+                   test_bug5_fine_phase_gpio_only \
+                   test_bug9_platform_ops_null \
+                   test_bug10_spi_cs_not_toggled
 
 # Tests that only need mocks (extracted patterns / static analysis)
 TESTS_MOCK_ONLY := test_bug2_ad9523_double_setup \
@@ -44,7 +46,7 @@ TESTS_MOCK_ONLY := test_bug2_ad9523_double_setup \
 
 ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY)
 
-.PHONY: all build test clean $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8)
+.PHONY: all build test clean $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10)
 
 all: build test
 
@@ -52,7 +54,7 @@ build: $(ALL_TESTS)
 
 test: build
 	@echo "==============================================="
-	@echo "  Running all 8 bug tests..."
+	@echo "  Running all 10 bug tests..."
 	@echo "==============================================="
 	@pass=0; fail=0; \
 	for t in $(ALL_TESTS); do \
@@ -124,6 +126,12 @@ test_bug7: test_bug7_gpio_pin_conflict
 
 test_bug8: test_bug8_uart_commented_out
 	./test_bug8_uart_commented_out
+
+test_bug9: test_bug9_platform_ops_null
+	./test_bug9_platform_ops_null
+
+test_bug10: test_bug10_spi_cs_not_toggled
+	./test_bug10_spi_cs_not_toggled
 
 # --- Clean ---
 

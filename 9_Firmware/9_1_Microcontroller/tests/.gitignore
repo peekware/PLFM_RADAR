@@ -11,3 +11,5 @@ test_bug5_fine_phase_gpio_only
 test_bug6_timer_variable_collision
 test_bug7_gpio_pin_conflict
 test_bug8_uart_commented_out
+test_bug9_platform_ops_null
+test_bug10_spi_cs_not_toggled

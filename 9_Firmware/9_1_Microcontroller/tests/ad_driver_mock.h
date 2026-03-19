@@ -47,7 +47,7 @@ struct no_os_spi_platform_ops {
 struct no_os_spi_init_param {
     uint32_t                            device_id;
     uint32_t                            max_speed_hz;
-    uint8_t                             chip_select;
+    uint16_t                            chip_select;
     enum no_os_spi_mode                 mode;
     enum no_os_spi_bit_order            bit_order;
     enum no_os_spi_lanes                lanes;

@@ -1,4 +1,5 @@
 #include "adf4382a_manager.h"
+#include "stm32_spi.h"
 #include "diag_log.h"
 #include "no_os_delay.h"
 #include <stdio.h>
@@ -12,7 +13,7 @@ extern SPI_HandleTypeDef hspi4;
 extern TIM_HandleTypeDef htim3;
 
 // Static function prototypes
-static void set_chip_enable(uint8_t ce_pin, bool state);
+static void set_chip_enable(uint16_t ce_pin, bool state);
 static void set_deladj_pin(uint8_t device, bool state);
 static void set_delstr_pin(uint8_t device, bool state);
 static void start_deladj_pwm(uint8_t device, uint16_t duty_cycle);
@@ -24,6 +25,10 @@ int ADF4382A_Manager_Init(ADF4382A_Manager *manager, SyncMethod method)
     struct adf4382_init_param tx_param, rx_param;
     int ret;
     uint32_t t_start = HAL_GetTick();
+
+    /* Platform SPI extras carry HAL handle + software CS port/pin */
+    static stm32_spi_extra spi_tx_extra;
+    static stm32_spi_extra spi_rx_extra;
     
     DIAG_SECTION("ADF4382A LO MANAGER INIT");
     DIAG("LO", "Init called with sync_method=%d (%s)",
@@ -48,14 +53,23 @@ int ADF4382A_Manager_Init(ADF4382A_Manager *manager, SyncMethod method)
     memset(&manager->spi_tx_param, 0, sizeof(manager->spi_tx_param));
     memset(&manager->spi_rx_param, 0, sizeof(manager->spi_rx_param));
 
+    // Setup platform SPI extras with software CS for each device
+    spi_tx_extra.hspi    = &hspi4;
+    spi_tx_extra.cs_port = TX_CS_GPIO_Port;
+    spi_tx_extra.cs_pin  = TX_CS_Pin;
+
+    spi_rx_extra.hspi    = &hspi4;
+    spi_rx_extra.cs_port = RX_CS_GPIO_Port;
+    spi_rx_extra.cs_pin  = RX_CS_Pin;
+
     // Setup TX SPI parameters for SPI4
     manager->spi_tx_param.device_id = ADF4382A_SPI_DEVICE_ID;
     manager->spi_tx_param.max_speed_hz = ADF4382A_SPI_SPEED_HZ;
     manager->spi_tx_param.mode = NO_OS_SPI_MODE_0;
     manager->spi_tx_param.chip_select = TX_CS_Pin;
     manager->spi_tx_param.bit_order = NO_OS_SPI_BIT_ORDER_MSB_FIRST;
-    manager->spi_tx_param.platform_ops = NULL;
-    manager->spi_tx_param.extra = &hspi4;
+    manager->spi_tx_param.platform_ops = &stm32_spi_ops;
+    manager->spi_tx_param.extra = &spi_tx_extra;
     
     // Setup RX SPI parameters for SPI4
     manager->spi_rx_param.device_id = ADF4382A_SPI_DEVICE_ID;
@@ -63,11 +77,12 @@ int ADF4382A_Manager_Init(ADF4382A_Manager *manager, SyncMethod method)
     manager->spi_rx_param.mode = NO_OS_SPI_MODE_0;
     manager->spi_rx_param.chip_select = RX_CS_Pin;
     manager->spi_rx_param.bit_order = NO_OS_SPI_BIT_ORDER_MSB_FIRST;
-    manager->spi_rx_param.platform_ops = NULL;
-    manager->spi_rx_param.extra = &hspi4;
+    manager->spi_rx_param.platform_ops = &stm32_spi_ops;
+    manager->spi_rx_param.extra = &spi_rx_extra;
     
-    DIAG("LO", "SPI4 params: TX_CS=0x%04X RX_CS=0x%04X speed=%lu Hz",
-         TX_CS_Pin, RX_CS_Pin, (unsigned long)ADF4382A_SPI_SPEED_HZ);
+    DIAG("LO", "SPI4 params: TX_CS=0x%04X RX_CS=0x%04X speed=%lu Hz platform_ops=%p",
+         TX_CS_Pin, RX_CS_Pin, (unsigned long)ADF4382A_SPI_SPEED_HZ,
+         (const void*)manager->spi_tx_param.platform_ops);
 
     // Configure TX parameters (10.5 GHz)
     memset(&tx_param, 0, sizeof(tx_param));
@@ -651,7 +666,7 @@ int ADF4382A_StrobePhaseShift(ADF4382A_Manager *manager, uint8_t device)
 
 // Static helper functions
 
-static void set_chip_enable(uint8_t ce_pin, bool state)
+static void set_chip_enable(uint16_t ce_pin, bool state)
 {
     GPIO_TypeDef* port = (ce_pin == TX_CE_Pin) ? TX_CE_GPIO_Port : RX_CE_GPIO_Port;
     HAL_GPIO_WritePin(port, ce_pin, state ? GPIO_PIN_SET : GPIO_PIN_RESET);

@@ -2,6 +2,7 @@
  * stm32_hal_mock.c -- Spy/recording implementation of STM32 HAL stubs
  ******************************************************************************/
 #include "stm32_hal_mock.h"
+#include "ad_driver_mock.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -262,3 +263,14 @@ void mock_tim_set_compare(TIM_HandleTypeDef *htim, uint32_t Channel, uint32_t Co
         .extra = htim
     });
 }
+
+/* ========================= Mock stm32_spi_ops ===================== */
+
+/* Stub SPI platform ops -- real adf4382a_manager.c references &stm32_spi_ops.
+ * In tests, adf4382_init() is mocked so no_os_spi_init() is never called.
+ * We provide a non-NULL struct so tests can assert platform_ops != NULL. */
+static int mock_spi_init_stub(void) { return 0; }
+
+const struct no_os_spi_platform_ops stm32_spi_ops = {
+    .init = mock_spi_init_stub,
+};
