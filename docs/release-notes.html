@@ -40,6 +40,21 @@
           </thead>
           <tbody>
             <tr>
+              <td><code>ed629e7</code> <strong>v0.1.6-mti</strong></td>
+              <td>Build 25: MTI canceller + DC notch filter integration</td>
+              <td>New production baseline. WNS +0.132 ns, WHS +0.058 ns. 9,252 LUTs (6.87%), 12,488 FFs (4.64%), 17 BRAM (4.66%), 142 DSP48E1 (19.19%), 0.753 W. New modules: mti_canceller.v (2-pulse canceller, H(z)=1-z^-1), DC notch filter (inline in system_top). Two new host registers: host_mti_enable (0x26), host_dc_notch_width (0x27). 23/23 FPGA, 20/20 MCU, 3/3 real-data co-sim exact match.</td>
+            </tr>
+            <tr>
+              <td><code>075ae1e</code> <strong>v0.1.5-cfar</strong></td>
+              <td>Build 24: CA-CFAR detector integration with pipelined noise computation</td>
+              <td>Prior production baseline. WNS +0.179 ns, WHS +0.056 ns. 8,558 LUTs, 10,384 FFs, 17 BRAM, 142 DSP48E1, 0.754 W. CA/GO/SO CFAR modes with BRAM magnitude buffer, sliding-window algorithm. Host-configurable guard/train/alpha/mode registers (0x21-0x25). Build 23 timing failure fixed by pipelining noise computation. 22/22 FPGA, 20/20 MCU.</td>
+            </tr>
+            <tr>
+              <td><code>e93bc33</code> <strong>v0.1.4-prod-fixes</strong></td>
+              <td>7 production-quality fixes: detection bugs, digital gain, watchdog, dead code removal</td>
+              <td>Detection sticky flag + magnitude lag fix, rename cfar&rarr;threshold_detect, host-configurable digital gain control (power-of-2 shift), Doppler/chirps mismatch protection (clamp + error flag), decimator watchdog timeout, bypass_mode dead code removal, range-mode register (0x20). Real-data co-sim framework added. 22/22 FPGA.</td>
+            </tr>
+            <tr>
               <td><code>2efab23</code> <strong>v0.1.4-build21</strong></td>
               <td>Build 21: FFT opts + E2E RTL fixes + Vivado DRC fix + MMCM LOCKED false_path fix</td>
               <td>New production baseline. WNS +0.156 ns, WHS +0.064 ns, WPWS +0.361 ns. 6,192 LUTs (4.6%), 9,064 FFs (3.4%), 16 BRAM (4.4%), 139 DSP48E1 (18.8%), 0.732 W. Includes 4-cycle FFT butterfly (20% throughput), barrel-shift twiddle (-1 DSP), Vivado DRC multiple-driver fix for data_pending flags, MMCM LOCKED XDC false_path fix (-from &rarr; -through). 19/19 FPGA, 20/20 MCU.</td>
@@ -117,7 +132,10 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Tagged releases</h2>
       <ul>
-        <li><strong>v0.1.4-build21</strong> (2efab23) &mdash; Current production baseline. WNS +0.156 ns, WHS +0.064 ns. Includes FFT opts, E2E RTL fixes, Vivado DRC fix, MMCM LOCKED XDC fix. 139 DSP48E1 (-1 vs Build 20).</li>
+        <li><strong>v0.1.6-mti</strong> (ed629e7) &mdash; Current production baseline. WNS +0.132 ns, WHS +0.058 ns. MTI canceller + DC notch filter. 9,252 LUTs, 12,488 FFs, 142 DSP48E1, 17 BRAM. 0.753 W.</li>
+        <li><strong>v0.1.5-cfar</strong> (075ae1e) &mdash; Prior production baseline. WNS +0.179 ns. CA-CFAR detector (CA/GO/SO modes) with pipelined noise computation.</li>
+        <li><strong>v0.1.4-prod-fixes</strong> (e93bc33) &mdash; 7 production fixes + real-data co-sim framework. WNS same as Build 21 (simulation-only changes).</li>
+        <li><strong>v0.1.4-build21</strong> (2efab23) &mdash; Pre-CFAR production baseline. WNS +0.156 ns, WHS +0.064 ns. Includes FFT opts, E2E RTL fixes, Vivado DRC fix, MMCM LOCKED XDC fix. 139 DSP48E1 (-1 vs Build 20).</li>
         <li><strong>v0.1.3-build20</strong> (c6103b3) &mdash; Prior production baseline. WNS +0.426 ns, all timing met. Includes Gaps 3, 5, 7.</li>
         <li><strong>v0.1.2-build18</strong> (3b7afba) &mdash; Prior production baseline. WNS +0.062 ns.</li>
         <li><strong>v0.1.1-build17</strong> (ed6f79c) &mdash; FIR DSP48 + BRAM migration build.</li>
@@ -137,7 +155,7 @@
             <tr><td>4</td><td>USB Read Path</td><td>Done (e5d1b3c)</td></tr>
             <tr><td>2</td><td>GUI Settings</td><td>Done (7cdfa48)</td></tr>
             <tr><td>6</td><td>CDC-15 USB Buses</td><td>Post-bring-up</td></tr>
-            <tr><td>1</td><td>CFAR Real Implementation</td><td>Post-bring-up</td></tr>
+            <tr><td>1</td><td>CFAR Real Implementation</td><td>Done (075ae1e, Build 24 + MTI in ed629e7)</td></tr>
           </tbody>
         </table>
       </div>
@@ -146,6 +164,12 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Open in GitHub</h2>
       <ul>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/ed629e7" target="_blank" rel="noopener">ed629e7</a> MTI canceller + DC notch filter (v0.1.6-mti)</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/075ae1e" target="_blank" rel="noopener">075ae1e</a> Build 24 report (v0.1.5-cfar)</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/0745cc4" target="_blank" rel="noopener">0745cc4</a> Pipeline CFAR noise computation (timing fix)</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/f71923b" target="_blank" rel="noopener">f71923b</a> Integrate CA-CFAR detector</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/e93bc33" target="_blank" rel="noopener">e93bc33</a> Production fixes 1-7 (v0.1.4-prod-fixes)</li>
+        <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/0b06436" target="_blank" rel="noopener">0b06436</a> Real-data co-simulation (v0.1.4-pre-fixes)</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/2efab23" target="_blank" rel="noopener">2efab23</a> Build 21: FFT opts + DRC fix + XDC fix (v0.1.4-build21)</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/0773001" target="_blank" rel="noopener">0773001</a> E2E test + RTL fixes</li>
         <li><a href="https://github.com/JJassonn69/PLFM_RADAR/commit/a3e1996" target="_blank" rel="noopener">a3e1996</a> FFT engine optimizations</li>
