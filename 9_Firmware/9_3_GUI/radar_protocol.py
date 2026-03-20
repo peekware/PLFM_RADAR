@@ -10,7 +10,7 @@ Matches usb_data_interface.v packet format exactly.
 USB Packet Protocol:
   TX (FPGA→Host):
     Data packet:  [0xAA] [range 4×32b] [doppler 4×32b] [det 1B] [0x55]
-    Status packet: [0xBB] [status 5×32b] [0x55]
+    Status packet: [0xBB] [status 6×32b] [0x55]
   RX (Host→FPGA):
     Command word:  {opcode[31:24], addr[23:16], value[15:0]}
 """
@@ -47,29 +47,30 @@ WATERFALL_DEPTH = 64
 
 class Opcode(IntEnum):
     """Host register opcodes (matches radar_system_top.v command decode)."""
-    TRIGGER         = 0x01
-    PRF_DIV         = 0x02
-    NUM_CHIRPS      = 0x03
-    CHIRP_TIMER     = 0x04
-    STREAM_ENABLE   = 0x05
-    GAIN_SHIFT      = 0x06
-    THRESHOLD       = 0x10
-    LONG_CHIRP      = 0x10
-    LONG_LISTEN     = 0x11
-    GUARD           = 0x12
-    SHORT_CHIRP     = 0x13
-    SHORT_LISTEN    = 0x14
-    CHIRPS_PER_ELEV = 0x15
-    DIGITAL_GAIN    = 0x16
-    RANGE_MODE      = 0x20
-    CFAR_GUARD      = 0x21
-    CFAR_TRAIN      = 0x22
-    CFAR_ALPHA      = 0x23
-    CFAR_MODE       = 0x24
-    CFAR_ENABLE     = 0x25
-    MTI_ENABLE      = 0x26
-    DC_NOTCH_WIDTH  = 0x27
-    STATUS_REQUEST  = 0xFF
+    TRIGGER             = 0x01
+    PRF_DIV             = 0x02
+    NUM_CHIRPS          = 0x03
+    CHIRP_TIMER         = 0x04
+    STREAM_ENABLE       = 0x05
+    GAIN_SHIFT          = 0x06
+    THRESHOLD           = 0x10
+    LONG_CHIRP          = 0x10
+    LONG_LISTEN         = 0x11
+    GUARD               = 0x12
+    SHORT_CHIRP         = 0x13
+    SHORT_LISTEN        = 0x14
+    CHIRPS_PER_ELEV     = 0x15
+    RANGE_MODE          = 0x20
+    CFAR_GUARD          = 0x21
+    CFAR_TRAIN          = 0x22
+    CFAR_ALPHA          = 0x23
+    CFAR_MODE           = 0x24
+    CFAR_ENABLE         = 0x25
+    MTI_ENABLE          = 0x26
+    DC_NOTCH_WIDTH      = 0x27
+    SELF_TEST_TRIGGER   = 0x30
+    SELF_TEST_STATUS    = 0x31
+    STATUS_REQUEST      = 0xFF
 
 
 # ============================================================================
@@ -96,7 +97,7 @@ class RadarFrame:
 
 @dataclass
 class StatusResponse:
-    """Parsed status response from FPGA."""
+    """Parsed status response from FPGA (8-word packet as of Build 26)."""
     radar_mode: int = 0
     stream_ctrl: int = 0
     cfar_threshold: int = 0
@@ -107,6 +108,10 @@ class StatusResponse:
     short_listen: int = 0
     chirps_per_elev: int = 0
     range_mode: int = 0
+    # Self-test results (word 5, added in Build 26)
+    self_test_flags: int = 0     # 5-bit result flags [4:0]
+    self_test_detail: int = 0    # 8-bit detail code [7:0]
+    self_test_busy: int = 0      # 1-bit busy flag
 
 
 # ============================================================================
@@ -197,19 +202,19 @@ class RadarProtocol:
     def parse_status_packet(raw: bytes) -> Optional[StatusResponse]:
         """
         Parse a status response packet.
-        Format: [0xBB] [5×4B status words] [0x55] = 1 + 20 + 1 = 22 bytes
+        Format: [0xBB] [6×4B status words] [0x55] = 1 + 24 + 1 = 26 bytes
         """
-        if len(raw) < 22:
+        if len(raw) < 26:
             return None
         if raw[0] != STATUS_HEADER_BYTE:
             return None
 
         words = []
-        for i in range(5):
+        for i in range(6):
             w = struct.unpack_from(">I", raw, 1 + i * 4)[0]
             words.append(w)
 
-        if raw[21] != FOOTER_BYTE:
+        if raw[25] != FOOTER_BYTE:
             return None
 
         sr = StatusResponse()
@@ -228,6 +233,11 @@ class RadarProtocol:
         sr.short_listen = (words[3] >> 16) & 0xFFFF
         # Word 4: {30'd0, range_mode[1:0]}
         sr.range_mode = words[4] & 0x03
+        # Word 5: {7'd0, self_test_busy, 8'd0, self_test_detail[7:0],
+        #           3'd0, self_test_flags[4:0]}
+        sr.self_test_flags = words[5] & 0x1F
+        sr.self_test_detail = (words[5] >> 8) & 0xFF
+        sr.self_test_busy = (words[5] >> 24) & 0x01
         return sr
 
     @staticmethod
@@ -248,8 +258,8 @@ class RadarProtocol:
                 else:
                     break
             elif buf[i] == STATUS_HEADER_BYTE:
-                # Status packet: 22 bytes
-                end = i + 22
+                # Status packet: 26 bytes (6 words + header + footer)
+                end = i + 26
                 if end <= len(buf):
                     packets.append((i, end, "status"))
                     i = end
@@ -423,8 +433,9 @@ _HARDWARE_ONLY_OPCODES = {
     0x13,  # SHORT_CHIRP
     0x14,  # SHORT_LISTEN
     0x15,  # CHIRPS_PER_ELEV
-    0x16,  # DIGITAL_GAIN
     0x20,  # RANGE_MODE
+    0x30,  # SELF_TEST_TRIGGER
+    0x31,  # SELF_TEST_STATUS
     0xFF,  # STATUS_REQUEST
 }
 
@@ -873,11 +884,13 @@ class RadarAcquisition(threading.Thread):
     """
 
     def __init__(self, connection: FT601Connection, frame_queue: queue.Queue,
-                 recorder: Optional[DataRecorder] = None):
+                 recorder: Optional[DataRecorder] = None,
+                 status_callback=None):
         super().__init__(daemon=True)
         self.conn = connection
         self.frame_queue = frame_queue
         self.recorder = recorder
+        self._status_callback = status_callback
         self._stop_event = threading.Event()
         self._frame = RadarFrame()
         self._sample_idx = 0
@@ -903,7 +916,17 @@ class RadarAcquisition(threading.Thread):
                 elif ptype == "status":
                     status = RadarProtocol.parse_status_packet(raw[start:end])
                     if status is not None:
-                        log.info(f"Status: mode={status.radar_mode} stream={status.stream_ctrl}")
+                        log.info(f"Status: mode={status.radar_mode} "
+                                 f"stream={status.stream_ctrl}")
+                        if status.self_test_busy or status.self_test_flags:
+                            log.info(f"Self-test: busy={status.self_test_busy} "
+                                     f"flags=0b{status.self_test_flags:05b} "
+                                     f"detail=0x{status.self_test_detail:02X}")
+                        if self._status_callback is not None:
+                            try:
+                                self._status_callback(status)
+                            except Exception as e:
+                                log.error(f"Status callback error: {e}")
 
         log.info("Acquisition thread stopped")
 

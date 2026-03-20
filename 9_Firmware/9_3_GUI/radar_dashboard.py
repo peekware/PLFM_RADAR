@@ -270,6 +270,33 @@ class RadarDashboard:
         ttk.Button(left, text="Request Status (0xFF)",
                    command=lambda: self._send_cmd(0xFF, 0)).pack(fill="x", pady=3)
 
+        ttk.Separator(left, orient="horizontal").pack(fill="x", pady=6)
+
+        ttk.Label(left, text="FPGA Self-Test", font=("Menlo", 10, "bold")).pack(
+            anchor="w", pady=(2, 0))
+        ttk.Button(left, text="Run Self-Test (0x30)",
+                   command=lambda: self._send_cmd(0x30, 1)).pack(fill="x", pady=3)
+        ttk.Button(left, text="Read Self-Test Result (0x31)",
+                   command=lambda: self._send_cmd(0x31, 0)).pack(fill="x", pady=3)
+
+        # Self-test result display
+        st_frame = ttk.LabelFrame(left, text="Self-Test Results", padding=6)
+        st_frame.pack(fill="x", pady=(6, 0))
+        self._st_labels = {}
+        for name, default_text in [
+            ("busy", "Busy: --"),
+            ("flags", "Flags: -----"),
+            ("detail", "Detail: 0x--"),
+            ("t0", "T0 BRAM: --"),
+            ("t1", "T1 CIC:  --"),
+            ("t2", "T2 FFT:  --"),
+            ("t3", "T3 Arith: --"),
+            ("t4", "T4 ADC:  --"),
+        ]:
+            lbl = ttk.Label(st_frame, text=default_text, font=("Menlo", 9))
+            lbl.pack(anchor="w")
+            self._st_labels[name] = lbl
+
         # Right column: Parameter configuration
         right = ttk.LabelFrame(outer, text="Parameter Configuration", padding=12)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -281,10 +308,10 @@ class RadarDashboard:
             ("CFAR Alpha Q4.4 (0x23)", 0x23, "48"),
             ("CFAR Mode (0x24)", 0x24, "0"),
             ("Threshold (0x10)", 0x10, "500"),
-            ("Gain Shift (0x16)", 0x16, "0"),
+            ("Gain Shift (0x06)", 0x06, "0"),
             ("DC Notch Width (0x27)", 0x27, "0"),
             ("Range Mode (0x20)", 0x20, "0"),
-            ("Stream Enable (0x04)", 0x04, "7"),
+            ("Stream Enable (0x05)", 0x05, "7"),
         ]
 
         for row_idx, (label, opcode, default) in enumerate(params):
@@ -367,7 +394,8 @@ class RadarDashboard:
             self.lbl_status.config(text="CONNECTED", foreground=GREEN)
             self.btn_connect.config(text="Disconnect")
             self._acq_thread = RadarAcquisition(
-                self.conn, self.frame_queue, self.recorder)
+                self.conn, self.frame_queue, self.recorder,
+                status_callback=self._on_status_received)
             self._acq_thread.start()
             log.info("Connected and acquisition started")
         else:
@@ -401,6 +429,46 @@ class RadarDashboard:
             self._send_cmd(op, val)
         except ValueError:
             log.error("Invalid custom command values")
+
+    def _on_status_received(self, status: StatusResponse):
+        """Called from acquisition thread — schedule UI update on main thread."""
+        self.root.after(0, self._update_self_test_labels, status)
+
+    def _update_self_test_labels(self, status: StatusResponse):
+        """Update the self-test result labels from a StatusResponse."""
+        if not hasattr(self, '_st_labels'):
+            return
+        flags = status.self_test_flags
+        detail = status.self_test_detail
+        busy = status.self_test_busy
+
+        busy_str = "RUNNING" if busy else "IDLE"
+        busy_color = YELLOW if busy else FG
+        self._st_labels["busy"].config(text=f"Busy: {busy_str}",
+                                        foreground=busy_color)
+        self._st_labels["flags"].config(text=f"Flags: {flags:05b}")
+        self._st_labels["detail"].config(text=f"Detail: 0x{detail:02X}")
+
+        # Individual test results (bit = 1 means PASS)
+        test_names = [
+            ("t0", "T0 BRAM"),
+            ("t1", "T1 CIC"),
+            ("t2", "T2 FFT"),
+            ("t3", "T3 Arith"),
+            ("t4", "T4 ADC"),
+        ]
+        for i, (key, name) in enumerate(test_names):
+            if busy:
+                result_str = "..."
+                color = YELLOW
+            elif flags & (1 << i):
+                result_str = "PASS"
+                color = GREEN
+            else:
+                result_str = "FAIL"
+                color = RED
+            self._st_labels[key].config(
+                text=f"{name}: {result_str}", foreground=color)
 
     # --------------------------------------------------------- Display loop
     def _schedule_update(self):

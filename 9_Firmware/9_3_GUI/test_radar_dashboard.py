@@ -17,7 +17,7 @@ import numpy as np
 
 from radar_protocol import (
     RadarProtocol, FT601Connection, DataRecorder, RadarAcquisition,
-    RadarFrame, StatusResponse,
+    RadarFrame, StatusResponse, Opcode,
     HEADER_BYTE, FOOTER_BYTE, STATUS_HEADER_BYTE,
     NUM_RANGE_BINS, NUM_DOPPLER_BINS, NUM_CELLS,
     _HARDWARE_ONLY_OPCODES, _REPLAY_ADJUSTABLE_OPCODES,
@@ -133,8 +133,9 @@ class TestRadarProtocol(unittest.TestCase):
     def _make_status_packet(self, mode=1, stream=7, threshold=10000,
                             long_chirp=3000, long_listen=13700,
                             guard=17540, short_chirp=50,
-                            short_listen=17450, chirps=32, range_mode=0):
-        """Build a 22-byte status response matching FPGA format."""
+                            short_listen=17450, chirps=32, range_mode=0,
+                            st_flags=0, st_detail=0, st_busy=0):
+        """Build a 26-byte status response matching FPGA format (Build 26)."""
         pkt = bytearray()
         pkt.append(STATUS_HEADER_BYTE)
 
@@ -157,6 +158,11 @@ class TestRadarProtocol(unittest.TestCase):
         # Word 4: {30'd0, range_mode[1:0]}
         w4 = range_mode & 0x03
         pkt += struct.pack(">I", w4)
+
+        # Word 5: {7'd0, self_test_busy, 8'd0, self_test_detail[7:0],
+        #           3'd0, self_test_flags[4:0]}
+        w5 = ((st_busy & 0x01) << 24) | ((st_detail & 0xFF) << 8) | (st_flags & 0x1F)
+        pkt += struct.pack(">I", w5)
 
         pkt.append(FOOTER_BYTE)
         return bytes(pkt)
@@ -182,7 +188,7 @@ class TestRadarProtocol(unittest.TestCase):
         self.assertEqual(sr.range_mode, 2)
 
     def test_parse_status_too_short(self):
-        self.assertIsNone(RadarProtocol.parse_status_packet(b"\xBB" + b"\x00" * 10))
+        self.assertIsNone(RadarProtocol.parse_status_packet(b"\xBB" + b"\x00" * 20))
 
     def test_parse_status_wrong_header(self):
         raw = self._make_status_packet()
@@ -191,8 +197,54 @@ class TestRadarProtocol(unittest.TestCase):
 
     def test_parse_status_wrong_footer(self):
         raw = bytearray(self._make_status_packet())
-        raw[-1] = 0x00  # corrupt footer
+        raw[25] = 0x00  # corrupt footer (was at index 21 in old 5-word format)
         self.assertIsNone(RadarProtocol.parse_status_packet(bytes(raw)))
+
+    def test_parse_status_self_test_all_pass(self):
+        """Status with all self-test flags set (all tests pass)."""
+        raw = self._make_status_packet(st_flags=0x1F, st_detail=0xA5, st_busy=0)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertIsNotNone(sr)
+        self.assertEqual(sr.self_test_flags, 0x1F)
+        self.assertEqual(sr.self_test_detail, 0xA5)
+        self.assertEqual(sr.self_test_busy, 0)
+
+    def test_parse_status_self_test_busy(self):
+        """Status with self-test busy flag set."""
+        raw = self._make_status_packet(st_flags=0x00, st_detail=0x00, st_busy=1)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertIsNotNone(sr)
+        self.assertEqual(sr.self_test_busy, 1)
+        self.assertEqual(sr.self_test_flags, 0)
+        self.assertEqual(sr.self_test_detail, 0)
+
+    def test_parse_status_self_test_partial_fail(self):
+        """Status with partial self-test failures (flags=0b10110)."""
+        raw = self._make_status_packet(st_flags=0b10110, st_detail=0x42, st_busy=0)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertIsNotNone(sr)
+        self.assertEqual(sr.self_test_flags, 0b10110)
+        self.assertEqual(sr.self_test_detail, 0x42)
+        self.assertEqual(sr.self_test_busy, 0)
+        # T0 (BRAM) failed, T1 (CIC) passed, T2 (FFT) passed, T3 (arith) failed, T4 (ADC) passed
+        self.assertFalse(sr.self_test_flags & 0x01)  # T0 fail
+        self.assertTrue(sr.self_test_flags & 0x02)    # T1 pass
+        self.assertTrue(sr.self_test_flags & 0x04)    # T2 pass
+        self.assertFalse(sr.self_test_flags & 0x08)   # T3 fail
+        self.assertTrue(sr.self_test_flags & 0x10)     # T4 pass
+
+    def test_parse_status_self_test_zero_word5(self):
+        """Status with zero word 5 (self-test never run)."""
+        raw = self._make_status_packet()
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertEqual(sr.self_test_flags, 0)
+        self.assertEqual(sr.self_test_detail, 0)
+        self.assertEqual(sr.self_test_busy, 0)
+
+    def test_status_packet_is_26_bytes(self):
+        """Verify status packet is exactly 26 bytes."""
+        raw = self._make_status_packet()
+        self.assertEqual(len(raw), 26)
 
     # ----------------------------------------------------------------
     # Boundary detection
@@ -375,9 +427,9 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_command_roundtrip_all_opcodes(self):
         """Verify all opcodes produce valid 4-byte commands."""
-        opcodes = [0x01, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12, 0x13, 0x14,
-                   0x15, 0x16, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
-                   0x27, 0xFF]
+        opcodes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12,
+                   0x13, 0x14, 0x15, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
+                   0x26, 0x27, 0x30, 0x31, 0xFF]
         for op in opcodes:
             cmd = RadarProtocol.build_command(op, 42)
             self.assertEqual(len(cmd), 4, f"opcode 0x{op:02X}")
@@ -607,6 +659,84 @@ class TestReplayConnection(unittest.TestCase):
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         conn.close()
+
+    def test_replay_self_test_opcodes_are_hardware_only(self):
+        """Self-test opcodes 0x30/0x31 are hardware-only (ignored in replay)."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # Send self-test trigger
+        cmd = RadarProtocol.build_command(0x30, 1)
+        conn.write(cmd)
+        self.assertFalse(conn._needs_rebuild)
+        # Send self-test status request
+        cmd = RadarProtocol.build_command(0x31, 0)
+        conn.write(cmd)
+        self.assertFalse(conn._needs_rebuild)
+        conn.close()
+
+
+class TestOpcodeEnum(unittest.TestCase):
+    """Verify Opcode enum matches RTL host register map."""
+
+    def test_gain_shift_is_0x06(self):
+        """GAIN_SHIFT opcode must be 0x06 (not 0x16)."""
+        self.assertEqual(Opcode.GAIN_SHIFT, 0x06)
+
+    def test_no_digital_gain_alias(self):
+        """DIGITAL_GAIN should NOT exist (was bogus 0x16 alias)."""
+        self.assertFalse(hasattr(Opcode, 'DIGITAL_GAIN'))
+
+    def test_self_test_trigger(self):
+        """SELF_TEST_TRIGGER opcode must be 0x30."""
+        self.assertEqual(Opcode.SELF_TEST_TRIGGER, 0x30)
+
+    def test_self_test_status(self):
+        """SELF_TEST_STATUS opcode must be 0x31."""
+        self.assertEqual(Opcode.SELF_TEST_STATUS, 0x31)
+
+    def test_self_test_in_hardware_only(self):
+        """Self-test opcodes must be in _HARDWARE_ONLY_OPCODES."""
+        self.assertIn(0x30, _HARDWARE_ONLY_OPCODES)
+        self.assertIn(0x31, _HARDWARE_ONLY_OPCODES)
+
+    def test_0x16_not_in_hardware_only(self):
+        """Bogus 0x16 must not be in _HARDWARE_ONLY_OPCODES."""
+        self.assertNotIn(0x16, _HARDWARE_ONLY_OPCODES)
+
+    def test_stream_enable_is_0x05(self):
+        """STREAM_ENABLE must be 0x05 (not 0x04)."""
+        self.assertEqual(Opcode.STREAM_ENABLE, 0x05)
+
+    def test_all_rtl_opcodes_present(self):
+        """Every RTL opcode has a matching Opcode enum member."""
+        expected = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                    0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+                    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+                    0x30, 0x31, 0xFF}
+        enum_values = set(int(m) for m in Opcode)
+        for op in expected:
+            self.assertIn(op, enum_values, f"0x{op:02X} missing from Opcode enum")
+
+
+class TestStatusResponseDefaults(unittest.TestCase):
+    """Verify StatusResponse dataclass has self-test fields."""
+
+    def test_default_self_test_fields(self):
+        sr = StatusResponse()
+        self.assertEqual(sr.self_test_flags, 0)
+        self.assertEqual(sr.self_test_detail, 0)
+        self.assertEqual(sr.self_test_busy, 0)
+
+    def test_self_test_fields_set(self):
+        sr = StatusResponse(self_test_flags=0x1F,
+                            self_test_detail=0xAB,
+                            self_test_busy=1)
+        self.assertEqual(sr.self_test_flags, 0x1F)
+        self.assertEqual(sr.self_test_detail, 0xAB)
+        self.assertEqual(sr.self_test_busy, 1)
 
 
 if __name__ == "__main__":
