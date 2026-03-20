@@ -20,6 +20,7 @@ from radar_protocol import (
     RadarFrame, StatusResponse,
     HEADER_BYTE, FOOTER_BYTE, STATUS_HEADER_BYTE,
     NUM_RANGE_BINS, NUM_DOPPLER_BINS, NUM_CELLS,
+    _HARDWARE_ONLY_OPCODES, _REPLAY_ADJUSTABLE_OPCODES,
 )
 
 
@@ -469,7 +470,7 @@ class TestReplayConnection(unittest.TestCase):
             if result["detection"]:
                 det_count += 1
         self.assertEqual(parsed_count, NUM_CELLS)
-        # Should have 4 CFAR detections from the golden reference
+        # Default: MTI=ON, DC_notch=2, CFAR CA g=2 t=8 a=0x30 → 4 detections
         self.assertEqual(det_count, 4)
         conn.close()
 
@@ -489,14 +490,14 @@ class TestReplayConnection(unittest.TestCase):
         conn.close()
 
     def test_replay_no_mti(self):
-        """ReplayConnection works with use_mti=False."""
+        """ReplayConnection works with use_mti=False (CFAR still runs)."""
         if not self._npy_available():
             self.skipTest("npy data files not found")
         from radar_protocol import ReplayConnection
         conn = ReplayConnection(self.NPY_DIR, use_mti=False)
         conn.open()
         self.assertEqual(conn._frame_len, NUM_CELLS * 35)
-        # No detections in non-MTI mode (flags are all zero)
+        # No-MTI with DC notch=2 and default CFAR → 0 detections
         raw = conn._packets
         boundaries = RadarProtocol.find_packet_boundaries(raw)
         det_count = sum(1 for s, e, t in boundaries
@@ -505,13 +506,106 @@ class TestReplayConnection(unittest.TestCase):
         conn.close()
 
     def test_replay_write_returns_true(self):
-        """Write on replay connection returns True (no-op)."""
+        """Write on replay connection returns True."""
         if not self._npy_available():
             self.skipTest("npy data files not found")
         from radar_protocol import ReplayConnection
         conn = ReplayConnection(self.NPY_DIR)
         conn.open()
         self.assertTrue(conn.write(b"\x01\x00\x00\x01"))
+        conn.close()
+
+    def test_replay_adjustable_param_cfar_guard(self):
+        """Changing CFAR guard via write() triggers re-processing."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # Initial: guard=2 → 4 detections
+        self.assertFalse(conn._needs_rebuild)
+        # Send CFAR_GUARD=4
+        cmd = RadarProtocol.build_command(0x21, 4)
+        conn.write(cmd)
+        self.assertTrue(conn._needs_rebuild)
+        self.assertEqual(conn._cfar_guard, 4)
+        # Read triggers rebuild
+        conn.read(1024)
+        self.assertFalse(conn._needs_rebuild)
+        conn.close()
+
+    def test_replay_adjustable_param_mti_toggle(self):
+        """Toggling MTI via write() triggers re-processing."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # Disable MTI
+        cmd = RadarProtocol.build_command(0x26, 0)
+        conn.write(cmd)
+        self.assertTrue(conn._needs_rebuild)
+        self.assertFalse(conn._mti_enable)
+        # Read to trigger rebuild, then count detections
+        # Drain all packets after rebuild
+        conn.read(1024)  # triggers rebuild
+        raw = conn._packets
+        boundaries = RadarProtocol.find_packet_boundaries(raw)
+        det_count = sum(1 for s, e, t in boundaries
+                        if RadarProtocol.parse_data_packet(raw[s:e]).get("detection", 0))
+        # No-MTI with default CFAR → 0 detections
+        self.assertEqual(det_count, 0)
+        conn.close()
+
+    def test_replay_adjustable_param_dc_notch(self):
+        """Changing DC notch width via write() triggers re-processing."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # Change DC notch to 0 (no notch)
+        cmd = RadarProtocol.build_command(0x27, 0)
+        conn.write(cmd)
+        self.assertTrue(conn._needs_rebuild)
+        self.assertEqual(conn._dc_notch_width, 0)
+        conn.read(1024)  # triggers rebuild
+        raw = conn._packets
+        boundaries = RadarProtocol.find_packet_boundaries(raw)
+        det_count = sum(1 for s, e, t in boundaries
+                        if RadarProtocol.parse_data_packet(raw[s:e]).get("detection", 0))
+        # DC notch=0 with MTI → 6 detections (more noise passes through)
+        self.assertEqual(det_count, 6)
+        conn.close()
+
+    def test_replay_hardware_opcode_ignored(self):
+        """Hardware-only opcodes don't trigger rebuild."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # Send TRIGGER (hardware-only)
+        cmd = RadarProtocol.build_command(0x01, 1)
+        conn.write(cmd)
+        self.assertFalse(conn._needs_rebuild)
+        # Send STREAM_ENABLE (hardware-only)
+        cmd = RadarProtocol.build_command(0x05, 7)
+        conn.write(cmd)
+        self.assertFalse(conn._needs_rebuild)
+        conn.close()
+
+    def test_replay_same_value_no_rebuild(self):
+        """Setting same value as current doesn't trigger rebuild."""
+        if not self._npy_available():
+            self.skipTest("npy data files not found")
+        from radar_protocol import ReplayConnection
+        conn = ReplayConnection(self.NPY_DIR, use_mti=True)
+        conn.open()
+        # CFAR guard already 2
+        cmd = RadarProtocol.build_command(0x21, 2)
+        conn.write(cmd)
+        self.assertFalse(conn._needs_rebuild)
         conn.close()
 
 

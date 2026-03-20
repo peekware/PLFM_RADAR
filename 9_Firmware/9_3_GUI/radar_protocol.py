@@ -409,43 +409,201 @@ class FT601Connection:
 # Replay Connection — feed real .npy data through the dashboard
 # ============================================================================
 
+# Hardware-only opcodes that cannot be adjusted in replay mode
+_HARDWARE_ONLY_OPCODES = {
+    0x01,  # TRIGGER
+    0x02,  # PRF_DIV
+    0x03,  # NUM_CHIRPS
+    0x04,  # CHIRP_TIMER
+    0x05,  # STREAM_ENABLE
+    0x06,  # GAIN_SHIFT
+    0x10,  # THRESHOLD / LONG_CHIRP
+    0x11,  # LONG_LISTEN
+    0x12,  # GUARD
+    0x13,  # SHORT_CHIRP
+    0x14,  # SHORT_LISTEN
+    0x15,  # CHIRPS_PER_ELEV
+    0x16,  # DIGITAL_GAIN
+    0x20,  # RANGE_MODE
+    0xFF,  # STATUS_REQUEST
+}
+
+# Replay-adjustable opcodes (re-run signal processing)
+_REPLAY_ADJUSTABLE_OPCODES = {
+    0x21,  # CFAR_GUARD
+    0x22,  # CFAR_TRAIN
+    0x23,  # CFAR_ALPHA
+    0x24,  # CFAR_MODE
+    0x25,  # CFAR_ENABLE
+    0x26,  # MTI_ENABLE
+    0x27,  # DC_NOTCH_WIDTH
+}
+
+
+def _saturate(val: int, bits: int) -> int:
+    """Saturate signed value to fit in 'bits' width."""
+    max_pos = (1 << (bits - 1)) - 1
+    max_neg = -(1 << (bits - 1))
+    return max(max_neg, min(max_pos, int(val)))
+
+
+def _replay_mti(decim_i: np.ndarray, decim_q: np.ndarray,
+                enable: bool) -> Tuple[np.ndarray, np.ndarray]:
+    """Bit-accurate 2-pulse MTI canceller (matches mti_canceller.v)."""
+    n_chirps, n_bins = decim_i.shape
+    mti_i = np.zeros_like(decim_i)
+    mti_q = np.zeros_like(decim_q)
+    if not enable:
+        return decim_i.copy(), decim_q.copy()
+    for c in range(n_chirps):
+        if c == 0:
+            pass  # muted
+        else:
+            for r in range(n_bins):
+                mti_i[c, r] = _saturate(int(decim_i[c, r]) - int(decim_i[c - 1, r]), 16)
+                mti_q[c, r] = _saturate(int(decim_q[c, r]) - int(decim_q[c - 1, r]), 16)
+    return mti_i, mti_q
+
+
+def _replay_dc_notch(doppler_i: np.ndarray, doppler_q: np.ndarray,
+                     width: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Bit-accurate DC notch filter (matches radar_system_top.v inline)."""
+    out_i = doppler_i.copy()
+    out_q = doppler_q.copy()
+    if width == 0:
+        return out_i, out_q
+    n_doppler = doppler_i.shape[1]
+    for dbin in range(n_doppler):
+        if dbin < width or dbin > (n_doppler - 1 - width + 1):
+            out_i[:, dbin] = 0
+            out_q[:, dbin] = 0
+    return out_i, out_q
+
+
+def _replay_cfar(doppler_i: np.ndarray, doppler_q: np.ndarray,
+                 guard: int, train: int, alpha_q44: int,
+                 mode: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Bit-accurate CA-CFAR detector (matches cfar_ca.v).
+    Returns (detect_flags, magnitudes) both (64, 32).
+    """
+    ALPHA_FRAC_BITS = 4
+    n_range, n_doppler = doppler_i.shape
+    if train == 0:
+        train = 1
+
+    # Compute magnitudes: |I| + |Q| (17-bit unsigned L1 norm)
+    magnitudes = np.zeros((n_range, n_doppler), dtype=np.int64)
+    for r in range(n_range):
+        for d in range(n_doppler):
+            i_val = int(doppler_i[r, d])
+            q_val = int(doppler_q[r, d])
+            abs_i = (-i_val) & 0xFFFF if i_val < 0 else i_val & 0xFFFF
+            abs_q = (-q_val) & 0xFFFF if q_val < 0 else q_val & 0xFFFF
+            magnitudes[r, d] = abs_i + abs_q
+
+    detect_flags = np.zeros((n_range, n_doppler), dtype=np.bool_)
+    MAX_MAG = (1 << 17) - 1
+
+    mode_names = {0: 'CA', 1: 'GO', 2: 'SO'}
+    mode_str = mode_names.get(mode, 'CA')
+
+    for dbin in range(n_doppler):
+        col = magnitudes[:, dbin]
+        for cut in range(n_range):
+            lead_sum, lead_cnt = 0, 0
+            for t in range(1, train + 1):
+                idx = cut - guard - t
+                if 0 <= idx < n_range:
+                    lead_sum += int(col[idx])
+                    lead_cnt += 1
+            lag_sum, lag_cnt = 0, 0
+            for t in range(1, train + 1):
+                idx = cut + guard + t
+                if 0 <= idx < n_range:
+                    lag_sum += int(col[idx])
+                    lag_cnt += 1
+
+            if mode_str == 'CA':
+                noise = lead_sum + lag_sum
+            elif mode_str == 'GO':
+                if lead_cnt > 0 and lag_cnt > 0:
+                    noise = lead_sum if lead_sum * lag_cnt > lag_sum * lead_cnt else lag_sum
+                else:
+                    noise = lead_sum if lead_cnt > 0 else lag_sum
+            elif mode_str == 'SO':
+                if lead_cnt > 0 and lag_cnt > 0:
+                    noise = lead_sum if lead_sum * lag_cnt < lag_sum * lead_cnt else lag_sum
+                else:
+                    noise = lead_sum if lead_cnt > 0 else lag_sum
+            else:
+                noise = lead_sum + lag_sum
+
+            thr = min((alpha_q44 * noise) >> ALPHA_FRAC_BITS, MAX_MAG)
+            if int(col[cut]) > thr:
+                detect_flags[cut, dbin] = True
+
+    return detect_flags, magnitudes
+
+
 class ReplayConnection:
     """
     Loads pre-computed .npy arrays (from golden_reference.py co-sim output)
     and serves them as USB data packets to the dashboard, exercising the full
     parsing pipeline with real ADI CN0566 radar data.
 
-    Supports multiple pipeline views (no-MTI, with-MTI) and loops the single
-    frame continuously so the waterfall/heatmap stay populated.
+    Signal processing parameters (CFAR guard/train/alpha/mode, MTI enable,
+    DC notch width) can be adjusted at runtime via write() — the connection
+    re-runs the bit-accurate processing pipeline and rebuilds packets.
 
     Required npy directory layout (e.g. tb/cosim/real_data/hex/):
-      doppler_map_i.npy          (64, 32) int   — Doppler I  (no MTI)
-      doppler_map_q.npy          (64, 32) int   — Doppler Q  (no MTI)
-      fullchain_mti_doppler_i.npy(64, 32) int   — Doppler I  (with MTI)
-      fullchain_mti_doppler_q.npy(64, 32) int   — Doppler Q  (with MTI)
-      fullchain_cfar_flags.npy   (64, 32) bool  — CFAR detections
-      fullchain_cfar_mag.npy     (64, 32) int   — CFAR |I|+|Q| magnitude
+      decimated_range_i.npy       (32, 64) int   — pre-Doppler range I
+      decimated_range_q.npy       (32, 64) int   — pre-Doppler range Q
+      doppler_map_i.npy           (64, 32) int   — Doppler I  (no MTI)
+      doppler_map_q.npy           (64, 32) int   — Doppler Q  (no MTI)
+      fullchain_mti_doppler_i.npy (64, 32) int   — Doppler I  (with MTI)
+      fullchain_mti_doppler_q.npy (64, 32) int   — Doppler Q  (with MTI)
+      fullchain_cfar_flags.npy    (64, 32) bool  — CFAR detections
+      fullchain_cfar_mag.npy      (64, 32) int   — CFAR |I|+|Q| magnitude
     """
 
     def __init__(self, npy_dir: str, use_mti: bool = True,
                  replay_fps: float = 5.0):
         self._npy_dir = npy_dir
         self._use_mti = use_mti
-        self._replay_interval = 1.0 / max(replay_fps, 0.1)
+        self._replay_fps = max(replay_fps, 0.1)
         self._lock = threading.Lock()
         self.is_open = False
         self._packets: bytes = b""
         self._read_offset = 0
         self._frame_len = 0
+        # Current signal-processing parameters
+        self._mti_enable: bool = use_mti
+        self._dc_notch_width: int = 2
+        self._cfar_guard: int = 2
+        self._cfar_train: int = 8
+        self._cfar_alpha: int = 0x30
+        self._cfar_mode: int = 0  # 0=CA, 1=GO, 2=SO
+        self._cfar_enable: bool = True
+        # Raw source arrays (loaded once, reprocessed on param change)
+        self._dop_mti_i: Optional[np.ndarray] = None
+        self._dop_mti_q: Optional[np.ndarray] = None
+        self._dop_nomti_i: Optional[np.ndarray] = None
+        self._dop_nomti_q: Optional[np.ndarray] = None
+        self._range_i_vec: Optional[np.ndarray] = None
+        self._range_q_vec: Optional[np.ndarray] = None
+        # Rebuild flag
+        self._needs_rebuild = False
 
     def open(self, device_index: int = 0) -> bool:
         try:
+            self._load_arrays()
             self._packets = self._build_packets()
             self._frame_len = len(self._packets)
             self._read_offset = 0
             self.is_open = True
             log.info(f"Replay connection opened: {self._npy_dir} "
-                     f"(MTI={'ON' if self._use_mti else 'OFF'}, "
+                     f"(MTI={'ON' if self._mti_enable else 'OFF'}, "
                      f"{self._frame_len} bytes/frame)")
             return True
         except Exception as e:
@@ -458,8 +616,15 @@ class ReplayConnection:
     def read(self, size: int = 4096) -> Optional[bytes]:
         if not self.is_open:
             return None
-        time.sleep(self._replay_interval / (NUM_CELLS / 32))
+        # Pace reads to target FPS (spread across ~64 reads per frame)
+        time.sleep((1.0 / self._replay_fps) / (NUM_CELLS / 32))
         with self._lock:
+            # If params changed, rebuild packets
+            if self._needs_rebuild:
+                self._packets = self._build_packets()
+                self._frame_len = len(self._packets)
+                self._read_offset = 0
+                self._needs_rebuild = False
             end = self._read_offset + size
             if end <= self._frame_len:
                 chunk = self._packets[self._read_offset:end]
@@ -470,65 +635,158 @@ class ReplayConnection:
             return chunk
 
     def write(self, data: bytes) -> bool:
-        log.info(f"Replay write (ignored): {data.hex()}")
+        """
+        Handle host commands in replay mode.
+        Signal-processing params (CFAR, MTI, DC notch) trigger re-processing.
+        Hardware-only params are silently ignored.
+        """
+        if len(data) < 4:
+            return True
+        word = struct.unpack(">I", data[:4])[0]
+        opcode = (word >> 24) & 0xFF
+        value = word & 0xFFFF
+
+        if opcode in _REPLAY_ADJUSTABLE_OPCODES:
+            changed = False
+            with self._lock:
+                if opcode == 0x21:  # CFAR_GUARD
+                    if self._cfar_guard != value:
+                        self._cfar_guard = value
+                        changed = True
+                elif opcode == 0x22:  # CFAR_TRAIN
+                    if self._cfar_train != value:
+                        self._cfar_train = value
+                        changed = True
+                elif opcode == 0x23:  # CFAR_ALPHA
+                    if self._cfar_alpha != value:
+                        self._cfar_alpha = value
+                        changed = True
+                elif opcode == 0x24:  # CFAR_MODE
+                    if self._cfar_mode != value:
+                        self._cfar_mode = value
+                        changed = True
+                elif opcode == 0x25:  # CFAR_ENABLE
+                    new_en = bool(value)
+                    if self._cfar_enable != new_en:
+                        self._cfar_enable = new_en
+                        changed = True
+                elif opcode == 0x26:  # MTI_ENABLE
+                    new_en = bool(value)
+                    if self._mti_enable != new_en:
+                        self._mti_enable = new_en
+                        changed = True
+                elif opcode == 0x27:  # DC_NOTCH_WIDTH
+                    if self._dc_notch_width != value:
+                        self._dc_notch_width = value
+                        changed = True
+                if changed:
+                    self._needs_rebuild = True
+            if changed:
+                log.info(f"Replay param updated: opcode=0x{opcode:02X} "
+                         f"value={value} — will re-process")
+            else:
+                log.debug(f"Replay param unchanged: opcode=0x{opcode:02X} "
+                          f"value={value}")
+        elif opcode in _HARDWARE_ONLY_OPCODES:
+            log.debug(f"Replay: hardware-only opcode 0x{opcode:02X} "
+                      f"(ignored in replay mode)")
+        else:
+            log.debug(f"Replay: unknown opcode 0x{opcode:02X} (ignored)")
         return True
 
-    def _build_packets(self) -> bytes:
-        """Build a full frame of USB data packets from npy arrays."""
+    def _load_arrays(self):
+        """Load source npy arrays once."""
         npy = self._npy_dir
+        # MTI Doppler
+        self._dop_mti_i = np.load(
+            os.path.join(npy, "fullchain_mti_doppler_i.npy")).astype(np.int64)
+        self._dop_mti_q = np.load(
+            os.path.join(npy, "fullchain_mti_doppler_q.npy")).astype(np.int64)
+        # Non-MTI Doppler
+        self._dop_nomti_i = np.load(
+            os.path.join(npy, "doppler_map_i.npy")).astype(np.int64)
+        self._dop_nomti_q = np.load(
+            os.path.join(npy, "doppler_map_q.npy")).astype(np.int64)
+        # Range data
+        try:
+            range_i_all = np.load(
+                os.path.join(npy, "decimated_range_i.npy")).astype(np.int64)
+            range_q_all = np.load(
+                os.path.join(npy, "decimated_range_q.npy")).astype(np.int64)
+            self._range_i_vec = range_i_all[-1, :]  # last chirp
+            self._range_q_vec = range_q_all[-1, :]
+        except FileNotFoundError:
+            self._range_i_vec = np.zeros(NUM_RANGE_BINS, dtype=np.int64)
+            self._range_q_vec = np.zeros(NUM_RANGE_BINS, dtype=np.int64)
 
-        if self._use_mti:
-            dop_i = np.load(os.path.join(npy, "fullchain_mti_doppler_i.npy")).astype(np.int64)
-            dop_q = np.load(os.path.join(npy, "fullchain_mti_doppler_q.npy")).astype(np.int64)
-            det = np.load(os.path.join(npy, "fullchain_cfar_flags.npy"))
+    def _build_packets(self) -> bytes:
+        """Build a full frame of USB data packets from current params."""
+        # Select Doppler data based on MTI
+        if self._mti_enable:
+            dop_i = self._dop_mti_i
+            dop_q = self._dop_mti_q
         else:
-            dop_i = np.load(os.path.join(npy, "doppler_map_i.npy")).astype(np.int64)
-            dop_q = np.load(os.path.join(npy, "doppler_map_q.npy")).astype(np.int64)
+            dop_i = self._dop_nomti_i
+            dop_q = self._dop_nomti_q
+
+        # Apply DC notch
+        dop_i, dop_q = _replay_dc_notch(dop_i, dop_q, self._dc_notch_width)
+
+        # Run CFAR
+        if self._cfar_enable:
+            det, _mag = _replay_cfar(
+                dop_i, dop_q,
+                guard=self._cfar_guard,
+                train=self._cfar_train,
+                alpha_q44=self._cfar_alpha,
+                mode=self._cfar_mode,
+            )
+        else:
             det = np.zeros((NUM_RANGE_BINS, NUM_DOPPLER_BINS), dtype=bool)
 
-        # Also load range data (use Doppler bin 0 column as range proxy,
-        # or load dedicated range if available)
-        try:
-            range_i_all = np.load(os.path.join(npy, "decimated_range_i.npy")).astype(np.int64)
-            range_q_all = np.load(os.path.join(npy, "decimated_range_q.npy")).astype(np.int64)
-            # Use last chirp as representative range profile
-            range_i_vec = range_i_all[-1, :]  # (64,)
-            range_q_vec = range_q_all[-1, :]
-        except FileNotFoundError:
-            range_i_vec = np.zeros(NUM_RANGE_BINS, dtype=np.int64)
-            range_q_vec = np.zeros(NUM_RANGE_BINS, dtype=np.int64)
+        det_count = int(det.sum())
+        log.info(f"Replay: rebuilt {NUM_CELLS} packets "
+                 f"(MTI={'ON' if self._mti_enable else 'OFF'}, "
+                 f"DC_notch={self._dc_notch_width}, "
+                 f"CFAR={'ON' if self._cfar_enable else 'OFF'} "
+                 f"G={self._cfar_guard} T={self._cfar_train} "
+                 f"a=0x{self._cfar_alpha:02X} m={self._cfar_mode}, "
+                 f"{det_count} detections)")
 
-        buf = bytearray()
+        range_i = self._range_i_vec
+        range_q = self._range_q_vec
+
+        # Pre-allocate buffer (35 bytes per packet * 2048 cells)
+        buf = bytearray(NUM_CELLS * 35)
+        pos = 0
         for rbin in range(NUM_RANGE_BINS):
+            ri = int(np.clip(range_i[rbin], -32768, 32767)) & 0xFFFF
+            rq = int(np.clip(range_q[rbin], -32768, 32767)) & 0xFFFF
+            rword = ((rq << 16) | ri) & 0xFFFFFFFF
+            rw0 = struct.pack(">I", rword)
+            rw1 = struct.pack(">I", (rword << 8) & 0xFFFFFFFF)
+            rw2 = struct.pack(">I", (rword << 16) & 0xFFFFFFFF)
+            rw3 = struct.pack(">I", (rword << 24) & 0xFFFFFFFF)
             for dbin in range(NUM_DOPPLER_BINS):
-                ri = int(np.clip(range_i_vec[rbin], -32768, 32767)) & 0xFFFF
-                rq = int(np.clip(range_q_vec[rbin], -32768, 32767)) & 0xFFFF
                 di = int(np.clip(dop_i[rbin, dbin], -32768, 32767)) & 0xFFFF
                 dq = int(np.clip(dop_q[rbin, dbin], -32768, 32767)) & 0xFFFF
                 d = 1 if det[rbin, dbin] else 0
 
-                pkt = bytearray()
-                pkt.append(HEADER_BYTE)
-
-                rword = ((rq << 16) | ri) & 0xFFFFFFFF
-                pkt += struct.pack(">I", rword)
-                pkt += struct.pack(">I", (rword << 8) & 0xFFFFFFFF)
-                pkt += struct.pack(">I", (rword << 16) & 0xFFFFFFFF)
-                pkt += struct.pack(">I", (rword << 24) & 0xFFFFFFFF)
-
                 dword = ((di << 16) | dq) & 0xFFFFFFFF
-                pkt += struct.pack(">I", dword)
-                pkt += struct.pack(">I", (dword << 8) & 0xFFFFFFFF)
-                pkt += struct.pack(">I", (dword << 16) & 0xFFFFFFFF)
-                pkt += struct.pack(">I", (dword << 24) & 0xFFFFFFFF)
 
-                pkt.append(d)
-                pkt.append(FOOTER_BYTE)
+                buf[pos] = HEADER_BYTE
+                pos += 1
+                buf[pos:pos+4] = rw0; pos += 4
+                buf[pos:pos+4] = rw1; pos += 4
+                buf[pos:pos+4] = rw2; pos += 4
+                buf[pos:pos+4] = rw3; pos += 4
+                buf[pos:pos+4] = struct.pack(">I", dword); pos += 4
+                buf[pos:pos+4] = struct.pack(">I", (dword << 8) & 0xFFFFFFFF); pos += 4
+                buf[pos:pos+4] = struct.pack(">I", (dword << 16) & 0xFFFFFFFF); pos += 4
+                buf[pos:pos+4] = struct.pack(">I", (dword << 24) & 0xFFFFFFFF); pos += 4
+                buf[pos] = d; pos += 1
+                buf[pos] = FOOTER_BYTE; pos += 1
 
-                buf += pkt
-
-        log.info(f"Replay: built {NUM_CELLS} packets ({len(buf)} bytes), "
-                 f"{int(det.sum())} detections")
         return bytes(buf)
 
 
