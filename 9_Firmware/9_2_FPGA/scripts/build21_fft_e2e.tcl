@@ -309,7 +309,10 @@ if {[catch {report_exceptions -file "${report_dir}/13_exceptions.rpt"} err]} {
     puts "  WARNING: report_exceptions failed: $err"
     puts "  (Known Vivado 2025.2 issue — non-critical)"
 }
-check_timing -verbose -file "${report_dir}/13_check_timing.rpt"
+if {[catch {check_timing -verbose -file "${report_dir}/13_check_timing.rpt"} err]} {
+    puts "  WARNING: check_timing failed: $err"
+    puts "  (Known Vivado 2025.2 issue — non-critical)"
+}
 
 # Compile configuration summary into a single text file
 set summary_fh [open "${report_dir}/00_build21_summary.txt" w]

@@ -31,6 +31,10 @@
       <h2>Recent milestone timeline</h2>
       <div class="timeline">
         <article>
+          <h3>Build 21 tagged v0.1.4-build21 &mdash; new production baseline (2efab23)</h3>
+          <p class="muted">WNS +0.156 ns, WHS +0.064 ns, WPWS +0.361 ns. 6,192 LUTs (4.6%), 9,064 FFs (3.4%), 16 BRAM (4.4%), 139 DSP48E1 (18.8%), 0.732 W. Includes FFT 4-cycle butterfly (20% throughput), barrel-shift twiddle (-1 DSP), Gap 2 GUI Settings, E2E RTL fixes (mixer sequencing, USB data-pending, receiver toggle wiring), Vivado DRC multiple-driver fix for data_pending flags, and MMCM LOCKED XDC false_path correction (-from &rarr; -through). Build script crash at report_exceptions/check_timing (Vivado 2025.2 bug) fixed by wrapping in catch blocks; all 12 critical reports and bitstream generated successfully.</p>
+        </article>
+        <article>
           <h3>E2E integration test + RTL fixes: mixer sequencing, USB data-pending, receiver wiring (0773001)</h3>
           <p class="muted">New end-to-end testbench (tb_system_e2e.v) with 46 checks across 12 groups covering reset, TX, safety, RX, USB R/W, CDC, beam scanning, reset recovery, stream control, latency budgets, and watchdog. RTL fixes discovered via E2E: chirp controller TX/RX mixer enables now mutually exclusive by FSM state; USB write FSM gains doppler/cfar data_pending sticky flags with stream-control reset default changed to range-only (3'b001); receiver gets STM32 toggle signal inputs and dynamic frame detection. USB unit tests 21/22/56 updated for data_pending architecture. Regression script PASS/FAIL parsing hardened. 19/19 FPGA, 20/20 MCU.</p>
         </article>
@@ -91,7 +95,8 @@
       <article class="card">
         <h2>Build history and timing improvements</h2>
         <ul>
-          <li><strong>Build 20 (v0.1.3-build20)</strong>: Current production baseline. WNS +0.426 ns, WHS +0.058 ns. 400 MHz MMCM + CIC CREG pipeline. 0.730 W.</li>
+          <li><strong>Build 21 (v0.1.4-build21)</strong>: Current production baseline. WNS +0.156 ns, WHS +0.064 ns. FFT 4-cycle butterfly + barrel-shift twiddle. 139 DSP48E1 (-1). 0.732 W.</li>
+          <li><strong>Build 20 (v0.1.3-build20)</strong>: Prior production baseline. WNS +0.426 ns, WHS +0.058 ns. 400 MHz MMCM + CIC CREG pipeline. 0.730 W.</li>
           <li><strong>Build 19</strong>: Failed (WNS -0.011 ns). Root cause: conflicting XDC generated clock prevented false-path application.</li>
           <li><strong>Build 18 (v0.1.2-build18)</strong>: Prior baseline. WNS +0.062 ns, WHS +0.059 ns. 0.631 W.</li>
           <li><strong>Build 17 (v0.1.1-build17)</strong>: FIR DSP48 pipelining + matched filter BRAM migration.</li>
