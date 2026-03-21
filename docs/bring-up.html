@@ -44,7 +44,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td>1</td><td>Freeze known-good firmware and bitstream baselines</td><td>Tracked commit, named artifact set, and repeatable programming flow are available</td><td>Git commit, bitstream path, reports, programming TCL</td></tr>
+            <tr><td>1</td><td>Freeze known-good firmware and bitstream baselines</td><td>Tracked commit, named artifact set, and repeatable programming flow are available</td><td>Git commit, bitstream path, reports, programming TCL; current heartbeat image at <code>docs/artifacts/te0713-te0701-heartbeat-2026-03-21.bit</code></td></tr>
             <tr><td>2</td><td>Preserve clean implementation constraints</td><td>Positive WNS/WHS/WPWS, XDCB-5 cleared, only documented methodology residue remains</td><td>Timing summary and methodology report</td></tr>
             <tr><td>3</td><td>Keep regressions green before board arrival</td><td>MCU host tests and FPGA regression/integration suites pass on the tracked tree</td><td>15/15 MCU and 18/18 FPGA logs</td></tr>
             <tr><td>4</td><td>Make first-power-on behavior observable</td><td>Clock, LO, beamformer, PA, and USB status can be identified from logs or status outputs</td><td>DIAG coverage, status fields, ILA/debug plan</td></tr>
@@ -111,7 +111,7 @@
         <h2>Required artifacts before hardware arrives</h2>
         <ul>
           <li>Named firmware baseline commit and build instructions for the MCU image.</li>
-          <li>Named FPGA baseline bitstream and matching `.ltx` probes file for debug sessions.</li>
+          <li>Named FPGA baseline bitstream and matching `.ltx` probes file for debug sessions; current low-risk heartbeat artifact is <code>docs/artifacts/te0713-te0701-heartbeat-2026-03-21.bit</code>.</li>
           <li>Current production-target XDC, timing summary, and methodology report.</li>
           <li>Programming and debug TCL scripts for baseline and debug images.</li>
           <li>Regression evidence for the tracked branch: MCU host suite and FPGA regression/integration suite.</li>
@@ -122,7 +122,7 @@
       <article class="card">
         <h2>Host-side tools and workflows</h2>
         <ul>
-          <li>JTAG programming workflow using the checked-in Vivado TCL scripts.</li>
+          <li>JTAG programming workflow using the checked-in Vivado TCL scripts and the TE0713 heartbeat baseline built on 2026-03-21.</li>
           <li>Serial capture on USART3 with timestamps preserved for bring-up logs.</li>
           <li>FT601 or host-side USB capture/decoder workflow to validate framing and payload stability.</li>
           <li>ILA capture workflow for raw ADC, DDC, matched-filter, and USB-domain checkpoints.</li>
@@ -148,7 +148,7 @@
             <tr><td>RF control-path realism</td><td>Firmware sequencing and diagnostics improved, but LO sync, phase behavior, and beamformer control still require physical validation.</td><td>Use readback-first bring-up and do not assume analog behavior from simulation or logs alone.</td></tr>
             <tr><td>Prototype-grade top-level functional assumptions</td><td>The active FPGA baseline is regression-clean, but some radar-function behavior still needs real-board confirmation under actual I/O conditions.</td><td>Validate each data-path stage incrementally with ILA and host captures before full streaming claims.</td></tr>
             <tr><td>PA calibration boundaries</td><td>IDQ calibration logic is much safer than before, but real-device convergence and margin limits are not yet board-proven.</td><td>Use conservative limits, observe every channel, and stop on abnormal current or non-convergent channels.</td></tr>
-            <tr><td>Board-specific integration unknowns</td><td>Carrier/module interaction, rails, clocks, and connector assumptions remain partially unproven until first assembly.</td><td>Begin with lowest-risk heartbeat and configuration checks before enabling higher-energy subsystems.</td></tr>
+            <tr><td>Board-specific integration unknowns</td><td>Carrier/module interaction, rails, clocks, and connector assumptions remain partially unproven until first assembly.</td><td>Begin with the tracked TE0713/TE0701 heartbeat image and configuration checks before enabling higher-energy subsystems.</td></tr>
           </tbody>
         </table>
       </div>

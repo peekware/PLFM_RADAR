@@ -40,6 +40,11 @@
           </thead>
           <tbody>
             <tr>
+              <td><code>TBD</code> <strong>v0.1.7-te0713-heartbeat</strong></td>
+              <td>TE0713/TE0701 minimal heartbeat bring-up bitstream</td>
+              <td>Created a low-risk bring-up artifact for the Trenz TE0713 + TE0701 stack using <code>radar_system_top_te0713_dev</code> and <code>te0713_te0701_minimal.xdc</code>. Remote Vivado 2025.2 build completed with DRC 0 errors, WNS +17.863 ns, WHS +0.265 ns. Intended as the first board-day image before FT601 arrival and before any radar-path integration.</td>
+            </tr>
+            <tr>
               <td><code>ed629e7</code> <strong>v0.1.6-mti</strong></td>
               <td>Build 25: MTI canceller + DC notch filter integration</td>
               <td>New production baseline. WNS +0.132 ns, WHS +0.058 ns. 9,252 LUTs (6.87%), 12,488 FFs (4.64%), 17 BRAM (4.66%), 142 DSP48E1 (19.19%), 0.753 W. New modules: mti_canceller.v (2-pulse canceller, H(z)=1-z^-1), DC notch filter (inline in system_top). Two new host registers: host_mti_enable (0x26), host_dc_notch_width (0x27). 23/23 FPGA, 20/20 MCU, 3/3 real-data co-sim exact match.</td>
@@ -132,6 +137,7 @@
     <section class="card" style="margin-top:0.8rem;">
       <h2>Tagged releases</h2>
       <ul>
+        <li><strong>v0.1.7-te0713-heartbeat</strong> &mdash; TE0713/TE0701 first-power baseline. Minimal heartbeat top, DRC clean, WNS +17.863 ns, WHS +0.265 ns. Artifact tracked at <code>docs/artifacts/te0713-te0701-heartbeat-2026-03-21.bit</code>.</li>
         <li><strong>v0.1.6-mti</strong> (ed629e7) &mdash; Current production baseline. WNS +0.132 ns, WHS +0.058 ns. MTI canceller + DC notch filter. 9,252 LUTs, 12,488 FFs, 142 DSP48E1, 17 BRAM. 0.753 W.</li>
         <li><strong>v0.1.5-cfar</strong> (075ae1e) &mdash; Prior production baseline. WNS +0.179 ns. CA-CFAR detector (CA/GO/SO modes) with pipelined noise computation.</li>
         <li><strong>v0.1.4-prod-fixes</strong> (e93bc33) &mdash; 7 production fixes + real-data co-sim framework. WNS same as Build 21 (simulation-only changes).</li>
