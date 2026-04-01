@@ -4,18 +4,167 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AERIS-10 Engineering Docs</title>
-  <link rel="stylesheet" href="assets/style.css">
+  <!-- Use absolute path from root for CSS -->
+  <link rel="stylesheet" href="/docs/assets/style.css">
+  <!-- Fallback inline styles if CSS file is missing -->
+  <style>
+    /* Base styles in case assets/style.css is missing */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #1a1a2e;
+      background: #f5f7fa;
+    }
+    .topbar {
+      background: #1a1a2e;
+      color: white;
+      padding: 1rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .brand {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #00d4ff;
+      text-decoration: none;
+    }
+    .nav a {
+      color: white;
+      text-decoration: none;
+      margin-left: 1.5rem;
+    }
+    .nav a:hover {
+      color: #00d4ff;
+    }
+    .page {
+      padding: 3rem 2rem;
+    }
+    .hero {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .eyebrow {
+      color: #00d4ff;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 1rem;
+    }
+    .hero h1 {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      color: #1a1a2e;
+    }
+    .cta-row {
+      margin-top: 2rem;
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .button {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      background: #00d4ff;
+      color: #1a1a2e;
+      text-decoration: none;
+      border-radius: 5px;
+      font-weight: 600;
+    }
+    .button.ghost {
+      background: transparent;
+      border: 2px solid #00d4ff;
+      color: #00d4ff;
+    }
+    .stats-grid, .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 2rem;
+      margin-bottom: 3rem;
+    }
+    .card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    .card h2 {
+      margin-bottom: 1rem;
+      font-size: 1.25rem;
+    }
+    .metric {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #00d4ff;
+      margin: 0.5rem 0;
+    }
+    .muted {
+      color: #666;
+      font-size: 0.875rem;
+    }
+    .card ul {
+      padding-left: 1.5rem;
+    }
+    .card li {
+      margin: 0.5rem 0;
+    }
+    .card a {
+      color: #00d4ff;
+      text-decoration: none;
+    }
+    .card a:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      background: #1a1a2e;
+      color: white;
+      text-align: center;
+      padding: 2rem;
+      margin-top: 2rem;
+    }
+    @media (max-width: 768px) {
+      .nav {
+        flex-direction: column;
+        text-align: center;
+      }
+      .nav a {
+        margin: 0 0.75rem;
+      }
+      .hero h1 {
+        font-size: 1.75rem;
+      }
+    }
+  </style>
 </head>
 <body>
   <header class="topbar">
     <div class="container nav">
-      <a class="brand" href="index.html">AERIS-10 Docs</a>
+      <a class="brand" href="/docs/index.html">AERIS-10 Docs</a>
       <nav>
-        <a href="architecture.html">Architecture</a>
-        <a href="implementation-log.html">Implementation Log</a>
-        <a href="bring-up.html">Bring-Up</a>
-        <a href="reports.html">Reports</a>
-        <a href="release-notes.html">Release Notes</a>
+        <a href="/docs/architecture.html">Architecture</a>
+        <a href="/docs/implementation-log.html">Implementation Log</a>
+        <a href="/docs/bring-up.html">Bring-Up</a>
+        <a href="/docs/reports.html">Reports</a>
+        <a href="/docs/release-notes.html">Release Notes</a>
+        <!-- Link back to main README -->
+        <a href="/README.md" style="color: #00d4ff;">📡 Main Project</a>
       </nav>
     </div>
   </header>
@@ -26,8 +175,8 @@
       <h1>Engineering Documentation Site</h1>
       <p>This site tracks architecture, validated implementation baselines, constraint cleanup progress, and pre-hardware bring-up readiness for AERIS-10.</p>
       <div class="cta-row">
-        <a class="button" href="implementation-log.html">View Change Timeline</a>
-        <a class="button ghost" href="bring-up.html">Open Readiness Package</a>
+        <a class="button" href="/docs/implementation-log.html">View Change Timeline</a>
+        <a class="button ghost" href="/docs/bring-up.html">Open Readiness Package</a>
       </div>
     </section>
 
@@ -68,19 +217,30 @@
       <article class="card">
         <h2>Documentation Map</h2>
         <ul>
-          <li><a href="architecture.html">System and FPGA Architecture</a></li>
-          <li><a href="implementation-log.html">Detailed Engineering Change Log</a></li>
-          <li><a href="bring-up.html">Pre-Arrival Bring-Up Plan, Artifact Checklist, and Open Risks</a></li>
-          <li><a href="reports.html">Published reports, simulations, and artifact context</a></li>
-          <li><a href="release-notes.html">Release Notes by Key Commit</a></li>
+          <li><a href="/docs/architecture.html">System and FPGA Architecture</a></li>
+          <li><a href="/docs/implementation-log.html">Detailed Engineering Change Log</a></li>
+          <li><a href="/docs/bring-up.html">Pre-Arrival Bring-Up Plan, Artifact Checklist, and Open Risks</a></li>
+          <li><a href="/docs/reports.html">Published reports, simulations, and artifact context</a></li>
+          <li><a href="/docs/release-notes.html">Release Notes by Key Commit</a></li>
         </ul>
       </article>
+    </section>
+
+    <!-- Optional: Add radar image from main repo -->
+    <section style="text-align: center; margin-top: 3rem;">
+      <h3>AERIS-10 Radar System</h3>
+      <img src="/media/image1.jpeg" alt="AERIS-10 Radar System" style="max-width: 100%; border-radius: 10px; margin-top: 1rem;">
+      <p class="muted" style="margin-top: 0.5rem;">Alpha prototype hardware</p>
     </section>
   </main>
 
   <footer class="footer">
     <div class="container">
       <p>AERIS-10 documentation published via GitHub Pages from <code>/docs</code>.</p>
+      <p style="margin-top: 0.5rem; font-size: 0.875rem;">
+        <a href="/README.md" style="color: #00d4ff;">Main Project README</a> | 
+        <a href="https://github.com/yourusername/aeris-10" style="color: #00d4ff;">GitHub Repository</a>
+      </p>
     </div>
   </footer>
 </body>
