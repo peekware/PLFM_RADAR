@@ -48,7 +48,11 @@ add_files -fileset constrs_1 -norecurse [file join $project_root "constraints" "
 # ============================================================================
 # DRC SEVERITY WAIVERS — 50T Hardware-Specific
 # ============================================================================
-# These must be set before synthesis/implementation runs.
+# NOTE: set_property SEVERITY in the parent process does NOT propagate to
+# child processes spawned by launch_runs. The actual waivers are applied via
+# a TCL.PRE hook (STEPS.OPT_DESIGN.TCL.PRE) written dynamically below.
+# We still set them here for any DRC checks run in the parent context
+# (e.g., report_drc after open_run).
 #
 # BIVC-1: Bank 14 VCCO=3.3V with LVDS_25 IBUFDS inputs + LVCMOS33 adc_pwdn.
 # IBUFDS inputs are VCCO-independent on 7-series (internal diff amplifier).
@@ -84,6 +88,20 @@ close_design
 
 # ===== IMPLEMENTATION =====
 set impl_start [clock seconds]
+
+# Write DRC waiver hook — this runs inside the impl_1 child process
+# right before opt_design, ensuring BIVC-1/NSTD-1/UCIO-1 are demoted
+# to warnings for the DRC checks that gate place_design.
+set hook_file [file join $project_dir "drc_waivers_50t.tcl"]
+set fh [open $hook_file w]
+puts $fh "# Auto-generated DRC waiver hook for 50T impl_1"
+puts $fh "set_property SEVERITY {Warning} \[get_drc_checks BIVC-1\]"
+puts $fh "set_property SEVERITY {Warning} \[get_drc_checks NSTD-1\]"
+puts $fh "set_property SEVERITY {Warning} \[get_drc_checks UCIO-1\]"
+puts $fh "puts \"  DRC waivers applied (BIVC-1, NSTD-1, UCIO-1 -> Warning)\""
+close $fh
+
+set_property STEPS.OPT_DESIGN.TCL.PRE $hook_file [get_runs impl_1]
 set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
 set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
 set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
