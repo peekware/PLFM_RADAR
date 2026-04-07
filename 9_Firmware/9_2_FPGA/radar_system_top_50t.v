@@ -6,12 +6,17 @@
  * 50T Production Wrapper for radar_system_top
  *
  * The XC7A50T-FTG256 has only 69 usable IO pins, but radar_system_top
- * declares 182 port bits (including FT601 USB 3.0, debug outputs, and
+ * declares many port bits (including FT601 USB 3.0, debug outputs, and
  * status signals that have no physical connections on the 50T board).
  *
- * This wrapper exposes only the 64 physically-connected ports and ties
- * off unused inputs. Unused outputs remain internally connected so the
- * full radar pipeline is preserved in the netlist.
+ * This wrapper exposes the physically-connected ports and ties off unused
+ * inputs. Unused outputs remain internally connected so the full radar
+ * pipeline is preserved in the netlist.
+ *
+ * USB: FT2232H (USB 2.0, 8-bit, 245 Synchronous FIFO mode)
+ *   - USB_MODE=1 selects the FT2232H interface in radar_system_top
+ *   - FT2232H CLKOUT (60 MHz) connected to ft601_clk_in (shared clock port)
+ *   - 15 signals on Bank 35 (VCCO=3.3V, LVCMOS33)
  */
 
 module radar_system_top_50t (
@@ -61,11 +66,20 @@ module radar_system_top_50t (
     input wire stm32_new_chirp,
     input wire stm32_new_elevation,
     input wire stm32_new_azimuth,
-    input wire stm32_mixers_enable
+    input wire stm32_mixers_enable,
+
+    // ===== FT2232H USB 2.0 Interface (Bank 35: 3.3V) =====
+    input wire ft_clkout,             // 60 MHz from FT2232H CLKOUT (MRCC pin C4)
+    inout wire [7:0] ft_data,         // 8-bit bidirectional data bus
+    input wire ft_rxf_n,              // RX FIFO not empty (active low)
+    input wire ft_txe_n,              // TX FIFO not full (active low)
+    output wire ft_rd_n,              // Read strobe (active low)
+    output wire ft_wr_n,              // Write strobe (active low)
+    output wire ft_oe_n,              // Output enable / bus direction
+    output wire ft_siwu               // Send Immediate / WakeUp
 );
 
-    // ===== Tie-off wires for unconstrained inputs =====
-    wire        ft601_clk_in_tied = 1'b0;
+    // ===== Tie-off wires for unconstrained FT601 inputs (inactive with USB_MODE=1) =====
     wire        ft601_txe_tied    = 1'b0;
     wire        ft601_rxf_tied    = 1'b0;
     wire [1:0]  ft601_srb_tied    = 2'b00;
@@ -96,11 +110,13 @@ module radar_system_top_50t (
     wire [3:0]  system_status_nc;
 
     (* DONT_TOUCH = "TRUE" *)
-    radar_system_top u_core (
+    radar_system_top #(
+        .USB_MODE(1)            // FT2232H (8-bit USB 2.0) for 50T production
+    ) u_core (
         // ----- Clocks & Reset -----
         .clk_100m               (clk_100m),
         .clk_120m_dac           (clk_120m_dac),
-        .ft601_clk_in           (ft601_clk_in_tied),
+        .ft601_clk_in           (ft_clkout),         // FT2232H 60 MHz CLKOUT → shared USB clock port
         .reset_n                (reset_n),
 
         // ----- DAC -----
@@ -158,7 +174,16 @@ module radar_system_top_50t (
         .stm32_new_azimuth      (stm32_new_azimuth),
         .stm32_mixers_enable    (stm32_mixers_enable),
 
-        // ----- FT601 (unwired on 50T) -----
+        // ----- FT2232H USB 2.0 (active on 50T, USB_MODE=1) -----
+        .ft_data                (ft_data),
+        .ft_rxf_n               (ft_rxf_n),
+        .ft_txe_n               (ft_txe_n),
+        .ft_rd_n                (ft_rd_n),
+        .ft_wr_n                (ft_wr_n),
+        .ft_oe_n                (ft_oe_n),
+        .ft_siwu                (ft_siwu),
+
+        // ----- FT601 (inactive with USB_MODE=1 — generate block ties off) -----
         .ft601_data             (ft601_data_internal),
         .ft601_be               (ft601_be_nc),
         .ft601_txe_n            (ft601_txe_n_nc),

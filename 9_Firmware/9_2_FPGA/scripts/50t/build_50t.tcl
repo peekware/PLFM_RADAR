@@ -68,11 +68,17 @@ add_files -fileset constrs_1 -norecurse [file join $project_root "constraints" "
 # conflict.
 set_property SEVERITY {Warning} [get_drc_checks BIVC-1]
 
-# NSTD-1 / UCIO-1: 118 unconstrained port bits — FT601 USB 3.0 (chip unwired
-# on 50T board), dac_clk (DAC clock from AD9523, not FPGA), and all
-# status/debug outputs (no physical pins on FTG256 package).
+# NSTD-1 / UCIO-1: Unconstrained port bits — FT601 USB ports (inactive with
+# USB_MODE=1 generate block), dac_clk (DAC clock from AD9523, not FPGA),
+# and all status/debug outputs (no physical pins on FTG256 package).
 set_property SEVERITY {Warning} [get_drc_checks NSTD-1]
 set_property SEVERITY {Warning} [get_drc_checks UCIO-1]
+
+# PLIO-9: FT2232H CLKOUT is routed to C4 (IO_L12N_T1_MRCC_35), the N-type
+# pin of a Multi-Region Clock-Capable pair. Clock inputs should ideally use
+# the P-type pin, but IBUFG works correctly on either. The schematic routes
+# to C4 and cannot be changed. Safe to demote.
+set_property SEVERITY {Warning} [get_drc_checks PLIO-9]
 
 # ===== SYNTHESIS =====
 set synth_start [clock seconds]
@@ -103,6 +109,14 @@ set impl_start [clock seconds]
 set_property SEVERITY {Warning} [get_drc_checks BIVC-1]
 set_property SEVERITY {Warning} [get_drc_checks NSTD-1]
 set_property SEVERITY {Warning} [get_drc_checks UCIO-1]
+set_property SEVERITY {Warning} [get_drc_checks PLIO-9]
+
+# FT2232H CLKOUT on C4 (N-type MRCC) — override dedicated clock route check.
+# The schematic routes the FT2232H 60 MHz clock to the N-pin of a differential
+# MRCC pair. Vivado Place 30-876 requires this property to allow placement.
+# The clock still reaches the clock network via IBUFG — this only suppresses
+# the DRC that demands the P-type pin.
+set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets {ft_clkout_IBUF}]
 
 # ---- Run implementation steps ----
 opt_design -directive Explore

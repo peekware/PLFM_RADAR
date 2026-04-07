@@ -79,6 +79,7 @@ set rtl_files [list \
     "${rtl_dir}/cfar_ca.v" \
     "${rtl_dir}/fpga_self_test.v" \
     "${rtl_dir}/usb_data_interface.v" \
+    "${rtl_dir}/usb_data_interface_ft2232h.v" \
     "${rtl_dir}/xfft_16.v" \
     "${rtl_dir}/fft_engine.v" \
 ]
