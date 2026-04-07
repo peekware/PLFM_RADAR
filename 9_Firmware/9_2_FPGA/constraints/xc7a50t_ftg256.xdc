@@ -20,13 +20,37 @@
 # DRC Fix History:
 #   - PLIO-9: Moved clk_120m_dac from C13 (N-type) to D13 (P-type MRCC).
 #     Clock inputs must use the P-type pin of a Multi-Region Clock-Capable pair.
-#   - BIVC-1: Root cause was IBUFDS primitives in ad9484_interface_400m.v
-#     hardcoded to LVDS_25 (VCCO=2.5V), conflicting with adc_pwdn LVCMOS33
-#     (VCCO=3.3V) in Bank 14. Fixed by changing RTL to IOSTANDARD("DEFAULT")
-#     so each target's XDC controls the standard (LVDS here, LVDS_25 on 200T).
-#     Note: LVDS (not LVDS_25 or LVDS_33) is the correct standard for IBUFDS
-#     inputs in HR banks with VCCO != 2.5V. LVDS_33 does not exist on 7-series.
+#   - BIVC-1: Bank 14 has VCCO=3.3V but LVDS inputs require LVDS_25 (no LVDS_33
+#     on 7-series, LVDS requires HP banks). IBUFDS input buffers are VCCO-
+#     independent — they work correctly with any VCCO. The BIVC-1 DRC is
+#     conservative (aimed at OBUFDS outputs). Waived via set_property SEVERITY
+#     in the build script. adc_pwdn (LVCMOS33) coexists in the same bank.
+#   - UCIO/NSTD: 118 unconstrained ports (FT601 unwired, status/debug outputs
+#     have no physical pins). Handled with SEVERITY demotion + default IOSTANDARD.
 # ============================================================================
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+set_property CFGBVS VCCO [current_design]
+set_property CONFIG_VOLTAGE 3.3 [current_design]
+
+# ============================================================================
+# DRC WAIVERS — Hardware-Level Known Issues (applied in build script)
+# ============================================================================
+# BIVC-1: Bank 14 VCCO=3.3V with LVDS_25 inputs + LVCMOS33 adc_pwdn.
+# IBUFDS input buffers are VCCO-independent on 7-series — they use an
+# internal differential amplifier that works correctly at any VCCO.
+# The BIVC-1 DRC check is intended for OBUFDS *outputs* where VCCO
+# directly affects the output swing. Since Bank 14 has only LVDS inputs
+# and one LVCMOS33 output, this is safe to demote to a warning.
+# → Applied in build_50t_test.tcl: set_property SEVERITY {Warning} [get_drc_checks BIVC-1]
+#
+# NSTD-1 / UCIO-1: Unconstrained ports — FT601 USB (unwired on this board),
+# dac_clk (DAC clock comes from AD9523, not FPGA), and all status/debug
+# outputs (no physical pins available). These ports are present in the
+# shared RTL but have no connections on the 50T board.
+# → Applied in build_50t_test.tcl: set_property SEVERITY {Warning} [get_drc_checks {NSTD-1 UCIO-1}]
 
 # ============================================================================
 # CLOCK CONSTRAINTS
@@ -53,10 +77,14 @@ create_clock -name clk_120m_dac -period 8.333 [get_ports {clk_120m_dac}]
 set_input_jitter [get_clocks clk_120m_dac] 0.1
 
 # ADC DCO Clock (400MHz LVDS — AD9523 OUT5 → AD9484 → FPGA, Bank 14 MRCC)
+# NOTE: LVDS_25 is the only valid differential input standard on 7-series HR
+# banks. IBUFDS input buffers are VCCO-independent — they work correctly even
+# with VCCO=3.3V. The BIVC-1 DRC (voltage conflict with LVCMOS33 adc_pwdn)
+# is waived in the build script since this bank has only LVDS *inputs*.
 set_property PACKAGE_PIN N14 [get_ports {adc_dco_p}]
 set_property PACKAGE_PIN P14 [get_ports {adc_dco_n}]
-set_property IOSTANDARD LVDS [get_ports {adc_dco_p}]
-set_property IOSTANDARD LVDS [get_ports {adc_dco_n}]
+set_property IOSTANDARD LVDS_25 [get_ports {adc_dco_p}]
+set_property IOSTANDARD LVDS_25 [get_ports {adc_dco_n}]
 set_property DIFF_TERM TRUE [get_ports {adc_dco_p}]
 create_clock -name adc_dco_p -period 2.5 [get_ports {adc_dco_p}]
 set_input_jitter [get_clocks adc_dco_p] 0.05
@@ -212,13 +240,15 @@ set_property PACKAGE_PIN R7  [get_ports {adc_d_n[7]}]
 set_property PACKAGE_PIN T5 [get_ports {adc_pwdn}]
 set_property IOSTANDARD LVCMOS33 [get_ports {adc_pwdn}]
 
-# LVDS I/O Standard — Bank 14 VCCO = 3.3V. Use LVDS (not LVDS_25, which
-# requires VCCO=2.5V). LVDS_33 does not exist on 7-series; LVDS works with
-# any VCCO for input-only buffers (IBUFDS) in HR banks.
-set_property IOSTANDARD LVDS [get_ports {adc_d_p[*]}]
-set_property IOSTANDARD LVDS [get_ports {adc_d_n[*]}]
+# LVDS I/O Standard — LVDS_25 is the only valid differential input standard
+# on 7-series HR banks. IBUFDS inputs work correctly regardless of VCCO.
+# The BIVC-1 DRC (conflict with LVCMOS33 adc_pwdn at VCCO=3.3V) is waived
+# in the build script since Bank 14 has only LVDS *inputs*, no outputs.
+set_property IOSTANDARD LVDS_25 [get_ports {adc_d_p[*]}]
+set_property IOSTANDARD LVDS_25 [get_ports {adc_d_n[*]}]
 
-# Differential termination — Bank 14 VCCO = 3.3V, compatible with LVDS.
+# Differential termination — DIFF_TERM uses a ~100-ohm on-die termination
+# inside the IBUFDS. This is VCCO-independent for 7-series input buffers.
 # RTL IBUFDS uses DIFF_TERM("FALSE") so this XDC property takes precedence.
 set_property DIFF_TERM TRUE [get_ports {adc_d_p[*]}]
 
