@@ -1,11 +1,15 @@
 ################################################################################
-# build_50t_test.tcl — XC7A50T Production Build
+# build_50t.tcl — XC7A50T Production Build
 # Builds the AERIS-10 design targeting the production 50T (FTG256) board
+#
+# Usage:
+#   cd 9_Firmware/9_2_FPGA
+#   vivado -mode batch -source scripts/50t/build_50t.tcl 2>&1 | tee build_50t/vivado.log
 ################################################################################
 
 set project_name    "aeris10_radar_50t"
 set script_dir      [file dirname [file normalize [info script]]]
-set project_root    [file normalize [file join $script_dir ".."]]
+set project_root    [file normalize [file join $script_dir "../.."]]
 set project_dir     [file join $project_root "build_50t"]
 set rtl_dir         $project_root
 set fpga_part       "xc7a50tftg256-2"

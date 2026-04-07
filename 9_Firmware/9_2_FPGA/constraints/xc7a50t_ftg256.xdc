@@ -255,8 +255,11 @@ set_property IOSTANDARD LVDS_25 [get_ports {adc_d_n[*]}]
 set_property DIFF_TERM TRUE [get_ports {adc_d_p[*]}]
 
 # Input delay for ADC data relative to DCO (adjust based on PCB trace length)
+# DDR interface: constrain both rising and falling clock edges
 set_input_delay -clock [get_clocks adc_dco_p] -max 1.0 [get_ports {adc_d_p[*]}]
 set_input_delay -clock [get_clocks adc_dco_p] -min 0.2 [get_ports {adc_d_p[*]}]
+set_input_delay -clock [get_clocks adc_dco_p] -max 1.0 -clock_fall [get_ports {adc_d_p[*]}] -add_delay
+set_input_delay -clock [get_clocks adc_dco_p] -min 0.2 -clock_fall [get_ports {adc_d_p[*]}] -add_delay
 
 # ============================================================================
 # FT601 USB 3.0 INTERFACE — ACTIVE: NO PHYSICAL CONNECTIONS

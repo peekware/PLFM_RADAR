@@ -1,42 +1,14 @@
 ################################################################################
-# build18_production.tcl
+# build_200t.tcl — XC7A200T Dev Board Build
+# AERIS-10 Build for the 200T development board (FBG484)
 #
-# AERIS-10 Build 18: Post-Optimization Production Build
 # Target: XC7A200T-2FBG484I
 # Design: radar_system_top
-# Tag:    v0.1.1-build17 + FIR DSP48 pipelining + matched filter BRAM migration
-#
-# Changes vs Build 17:
-#   - FIR DSP48 BREG+MREG pipelining (fixes 68 DPIP-1 + 35 DPOP-2 warnings)
-#   - Matched filter input buffer migrated from register arrays to BRAM
-#     (~33K FF savings expected, +2 BRAM18 used)
-#   - Fixed: report_exceptions Vivado 2025.2 syntax (catch block)
-#
-# Generates ALL reports required for the 15-point Vivado TCL Build Report
-# Analysis Checklist:
-#   1.  Run Status (synth/opt/place/route completion)
-#   2.  Timing Summary (WNS/TNS/WHS)
-#   3.  Clock Analysis (report_clocks)
-#   4.  Utilization Report (LUT/FF/BRAM/DSP)
-#   5.  Power Report (dynamic/static/thermal)
-#   6.  DRC (Design Rule Check)
-#   7.  IO and Constraints (report_io, unconstrained ports)
-#   8.  Congestion Analysis (report_design_analysis -congestion)
-#   9.  Route Status (unrouted nets)
-#  10.  Critical Paths (report_timing -max_paths 20)
-#  11.  QoR Summary (report_qor_summary)
-#  12.  CDC Analysis
-#  13.  Log File Scan (captured in build log)
-#  14.  Bitstream Generation (write_bitstream)
-#  15.  Final Signoff Criteria (all above combined)
 #
 # Usage:
-#   vivado -mode batch -source build18_production.tcl \
-#     -log build/build18.log \
-#     -journal build/build18.jou
-#
-# Author: auto-generated for Jason Stone
-# Date:   2026-03-19
+#   cd 9_Firmware/9_2_FPGA
+#   vivado -mode batch -source scripts/200t/build_200t.tcl \
+#     -log build/build.log -journal build/build.jou
 ################################################################################
 
 # ==============================================================================
@@ -45,15 +17,15 @@
 
 set project_name    "aeris10_radar"
 set script_dir      [file dirname [file normalize [info script]]]
-set project_root    [file normalize [file join $script_dir ".."]]
+set project_root    [file normalize [file join $script_dir "../.."]]
 set project_dir     [file join $project_root "build"]
 set rtl_dir         $project_root
 set top_module      "radar_system_top"
 set fpga_part       "xc7a200tfbg484-2"
-set report_dir      "${project_dir}/reports_build18"
+set report_dir      "${project_dir}/reports_build21"
 set sim_dir         "${project_dir}/sim"
 set bitstream_dir   "${project_dir}/bitstream"
-set build_tag       "build18"
+set build_tag       "build21"
 
 file mkdir $report_dir
 file mkdir $sim_dir
@@ -64,7 +36,7 @@ set build_start [clock seconds]
 set build_timestamp [clock format $build_start -format {%Y-%m-%d %H:%M:%S}]
 
 puts "================================================================"
-puts "  AERIS-10 Build 18: Post-Optimization Production Build"
+puts "  AERIS-10 Build 21: FFT Optimizations + E2E RTL Fixes"
 puts "  Target:    $fpga_part"
 puts "  Top:       $top_module"
 puts "  Reports:   $report_dir"
@@ -80,6 +52,7 @@ set_property target_language Verilog [current_project]
 
 # --- Add RTL sources ---
 set rtl_files [list \
+    "${rtl_dir}/adc_clk_mmcm.v" \
     "${rtl_dir}/ad9484_interface_400m.v" \
     "${rtl_dir}/cdc_modules.v" \
     "${rtl_dir}/chirp_memory_loader_param.v" \
@@ -108,7 +81,6 @@ set rtl_files [list \
     "${rtl_dir}/usb_data_interface.v" \
     "${rtl_dir}/xfft_16.v" \
     "${rtl_dir}/fft_engine.v" \
-    "${rtl_dir}/adc_clk_mmcm.v" \
 ]
 
 set file_count 0
@@ -129,8 +101,10 @@ foreach f $mem_files {
     puts "  Added MEM: [file tail $f]"
 }
 
-# Add constraints
+# Add constraints — main production XDC + MMCM supplementary XDC (FIXED)
 add_files -fileset constrs_1 -norecurse [file join $project_root "constraints" "xc7a200t_fbg484.xdc"]
+add_files -fileset constrs_1 -norecurse [file join $project_root "constraints" "adc_clk_mmcm.xdc"]
+
 set_property top $top_module [current_fileset]
 set_property verilog_define {FFT_XPM_BRAM} [current_fileset]
 
@@ -300,23 +274,25 @@ puts "  [12/15] CDC Analysis..."
 report_cdc -details -file "${report_dir}/12_cdc.rpt"
 
 # --- Checklist Item 13: Log Scan (captured separately in build log) ---
-puts "  [13/15] Log scan — see build18.log"
+puts "  [13/15] Log scan — see build21.log"
 
 # --- Additional reports ---
 puts "  \[extra\] Generating additional diagnostic reports..."
 
-# Check_timing for completeness
 # report_exceptions can fail in Vivado 2025.2 — wrap in catch
 if {[catch {report_exceptions -file "${report_dir}/13_exceptions.rpt"} err]} {
     puts "  WARNING: report_exceptions failed: $err"
     puts "  (Known Vivado 2025.2 issue — non-critical)"
 }
-check_timing -verbose -file "${report_dir}/13_check_timing.rpt"
+if {[catch {check_timing -verbose -file "${report_dir}/13_check_timing.rpt"} err]} {
+    puts "  WARNING: check_timing failed: $err"
+    puts "  (Known Vivado 2025.2 issue — non-critical)"
+}
 
 # Compile configuration summary into a single text file
-set summary_fh [open "${report_dir}/00_build18_summary.txt" w]
+set summary_fh [open "${report_dir}/00_build21_summary.txt" w]
 puts $summary_fh "================================================================"
-puts $summary_fh "  AERIS-10 Build 18 — Post-Optimization Production Build Summary"
+puts $summary_fh "  AERIS-10 Build 21 — FFT Optimizations + E2E RTL Fixes"
 puts $summary_fh "================================================================"
 puts $summary_fh ""
 puts $summary_fh "Build Tag:       $build_tag"
@@ -344,6 +320,19 @@ puts $summary_fh "  TNS:  $tns ns"
 puts $summary_fh "  WHS:  $whs ns"
 puts $summary_fh "  THS:  $ths ns"
 puts $summary_fh ""
+puts $summary_fh "  Build 20 Baseline: WNS = +0.426 ns, WHS = +0.058 ns"
+puts $summary_fh "  Gap 2 Build (ref): WNS = +0.078 ns, WHS = +0.054 ns"
+if {[string is double -strict $wns]} {
+    puts $summary_fh "  Delta WNS vs B20: [expr {$wns - 0.426}] ns"
+} else {
+    puts $summary_fh "  Delta WNS vs B20: N/A (timing stats unavailable)"
+}
+if {[string is double -strict $whs]} {
+    puts $summary_fh "  Delta WHS vs B20: [expr {$whs - 0.058}] ns"
+} else {
+    puts $summary_fh "  Delta WHS vs B20: N/A (timing stats unavailable)"
+}
+puts $summary_fh ""
 
 # Extract utilization
 puts $summary_fh "--- Utilization ---"
@@ -356,11 +345,22 @@ puts $summary_fh "  FFs:   $ff_used / 269200"
 puts $summary_fh "  BRAM:  $bram_used cells"
 puts $summary_fh "  DSP:   $dsp_used cells"
 puts $summary_fh ""
+puts $summary_fh "  Build 20 Baseline: LUTs=6092, FFs=9024, BRAM=16, DSP=140"
+puts $summary_fh "  Gap 2 Build (ref): LUTs=6343, FFs=9197, BRAM=16, DSP=140"
+puts $summary_fh "  Expected Build 21: DSP ~139 (−1 from barrel-shift twiddle)"
+puts $summary_fh ""
 
 # Route status
 set unrouted [llength [get_nets -hierarchical -filter {ROUTE_STATUS == UNROUTED}]]
 puts $summary_fh "--- Route ---"
 puts $summary_fh "  Unrouted nets: $unrouted"
+puts $summary_fh ""
+
+# MMCM usage
+puts $summary_fh "--- MMCM Usage (Gap 7) ---"
+set mmcm_count [llength [get_cells -hierarchical -filter {PRIMITIVE_TYPE =~ CLOCK.MMCM.*}]]
+puts $summary_fh "  MMCME2 used: $mmcm_count / 10"
+puts $summary_fh "  Expected: 1 (adc_clk_mmcm jitter cleaner)"
 puts $summary_fh ""
 
 # Bitstream
@@ -414,6 +414,16 @@ if {[file exists $bit_src]} {
     set signoff_pass 0
 }
 puts $summary_fh ""
+
+# Timing regression check vs Build 20
+if {[string is double -strict $wns] && $wns < 0.078} {
+    puts $summary_fh "  *** WARNING: WNS REGRESSED below Gap 2 build (was +0.078 ns, now $wns ns) ***"
+    puts $summary_fh "  *** Review critical paths — FFT opts or RTL fixes may have introduced new timing pressure ***"
+}
+if {[string is double -strict $whs] && $whs < 0.054} {
+    puts $summary_fh "  *** WARNING: WHS REGRESSED below Gap 2 build (was +0.054 ns, now $whs ns) ***"
+}
+
 if {$signoff_pass} {
     puts $summary_fh "  *** SIGNOFF: PASS ***"
 } else {
@@ -421,7 +431,7 @@ if {$signoff_pass} {
 }
 
 close $summary_fh
-puts "  Summary written to: ${report_dir}/00_build18_summary.txt"
+puts "  Summary written to: ${report_dir}/00_build21_summary.txt"
 
 # ==============================================================================
 # 6. SDF + Timing Netlist (for post-route simulation)
@@ -448,7 +458,7 @@ set build_end [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
 
 puts ""
 puts "================================================================"
-puts "  BUILD 18 COMPLETE"
+puts "  BUILD 21 COMPLETE"
 puts "================================================================"
 puts "  Started:    $build_timestamp"
 puts "  Finished:   $build_end"
@@ -459,6 +469,8 @@ puts "  Bitstream:  ${bit_elapsed}s"
 puts "  Reports:    $report_dir"
 puts "  Bitstream:  ${bitstream_dir}/${top_module}_${build_tag}.bit"
 puts "  WNS: $wns ns | WHS: $whs ns | TNS: $tns ns"
+puts "  Build 20 baseline: WNS +0.426 | WHS +0.058"
+puts "  Gap 2 build (ref): WNS +0.078 | WHS +0.054"
 if {$signoff_pass} {
     puts "  SIGNOFF: PASS"
 } else {
