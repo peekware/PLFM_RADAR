@@ -117,6 +117,12 @@ foreach p $unconstrained_ports {
         set port_objs [get_ports -quiet $p]
     }
     foreach port_obj $port_objs {
+        # Disconnect the net(s) driving/driven by this port first
+        set net_objs [get_nets -quiet -of_objects $port_obj]
+        foreach net_obj $net_objs {
+            catch {disconnect_net -net $net_obj -objects $port_obj}
+        }
+        # Now remove the disconnected port
         if {[catch {remove_port $port_obj} err]} {
             puts "  WARN: Could not remove port $port_obj: $err"
         } else {
