@@ -48,11 +48,10 @@ add_files -fileset constrs_1 -norecurse [file join $project_root "constraints" "
 # ============================================================================
 # DRC SEVERITY WAIVERS — 50T Hardware-Specific
 # ============================================================================
-# NOTE: set_property SEVERITY in the parent process does NOT propagate to
-# child processes spawned by launch_runs. The actual waivers are applied via
-# a TCL.PRE hook (STEPS.OPT_DESIGN.TCL.PRE) written dynamically below.
-# We still set them here for any DRC checks run in the parent context
-# (e.g., report_drc after open_run).
+# NOTE: DRC severity waivers are set both before synthesis and after open_run
+# synth_1. Implementation uses direct commands (opt_design, place_design, etc.)
+# rather than launch_runs/wait_on_run, so all commands share the same Vivado
+# context. This also allows removing unconstrained ports before placement.
 #
 # BIVC-1: Bank 14 VCCO=2.5V (enforced by LVDS_25) with LVCMOS25 adc_pwdn.
 # This should no longer fire now that adc_pwdn is LVCMOS25, but we keep
@@ -84,63 +83,68 @@ if {![string match "*Complete*" $synth_status]} {
 open_run synth_1
 report_timing_summary -file "${report_dir}/01_timing_post_synth.rpt"
 report_utilization -file "${report_dir}/01_utilization_post_synth.rpt"
-close_design
 
-# ===== IMPLEMENTATION =====
+# ===== IMPLEMENTATION (non-project-mode style) =====
+# We run implementation steps directly in the parent process instead of
+# using launch_runs/wait_on_run. This ensures DRC waivers and port removal
+# commands execute in the same Vivado context as place_design.
 set impl_start [clock seconds]
 
-# Write DRC waiver hook — this runs inside the impl_1 child process
-# right before opt_design, ensuring BIVC-1/NSTD-1/UCIO-1 are demoted
-# to warnings for the DRC checks that gate place_design.
-set hook_file [file join $project_dir "drc_waivers_50t.tcl"]
-set fh [open $hook_file w]
-puts $fh "# Auto-generated DRC waiver hook for 50T impl_1"
-puts $fh "set_property SEVERITY {Warning} \[get_drc_checks BIVC-1\]"
-puts $fh "set_property SEVERITY {Warning} \[get_drc_checks NSTD-1\]"
-puts $fh "set_property SEVERITY {Warning} \[get_drc_checks UCIO-1\]"
-puts $fh "puts \"  DRC waivers applied (BIVC-1, NSTD-1, UCIO-1 -> Warning)\""
-close $fh
+# Re-apply DRC waivers in this context (parent process)
+set_property SEVERITY {Warning} [get_drc_checks BIVC-1]
+set_property SEVERITY {Warning} [get_drc_checks NSTD-1]
+set_property SEVERITY {Warning} [get_drc_checks UCIO-1]
 
-set_property STEPS.OPT_DESIGN.TCL.PRE $hook_file [get_runs impl_1]
-set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
-set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
-set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
-set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
-set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
-
-launch_runs impl_1 -jobs 8
-wait_on_run impl_1
-set impl_elapsed [expr {[clock seconds] - $impl_start}]
-set impl_status [get_property STATUS [get_runs impl_1]]
-puts "  Implementation status: $impl_status"
-puts "  Implementation time:   ${impl_elapsed}s"
-
-if {![string match "*Complete*" $impl_status] && ![string match "*write_bitstream*" $impl_status]} {
-    puts "CRITICAL: IMPLEMENTATION FAILED: $impl_status"
-    close_project
-    exit 1
+# ---- Remove unconstrained ports from netlist ----
+# The 50T board (FTG256, 69 usable IOs) cannot accommodate all 182 port bits.
+# These ports have no physical connections on the 50T PCB: FT601 USB 3.0
+# (chip unwired), dac_clk (driven by AD9523, not FPGA), and all
+# status/debug outputs. Removing them from the netlist avoids [Place 30-58].
+set unconstrained_ports {
+    ft601_clk_in ft601_data ft601_be ft601_txe_n ft601_rxf_n
+    ft601_txe ft601_rxf ft601_wr_n ft601_rd_n ft601_oe_n
+    ft601_siwu_n ft601_srb ft601_swb ft601_clk_out
+    dac_clk
+    current_elevation current_azimuth current_chirp new_chirp_frame
+    dbg_doppler_data dbg_doppler_valid dbg_doppler_bin dbg_range_bin
+    system_status
 }
+set removed_count 0
+foreach p $unconstrained_ports {
+    # Match scalar port or bus port bits (e.g., "ft601_data" matches ft601_data[*])
+    set port_objs [get_ports -quiet "${p}\[*\]"]
+    if {[llength $port_objs] == 0} {
+        set port_objs [get_ports -quiet $p]
+    }
+    foreach port_obj $port_objs {
+        if {[catch {remove_port $port_obj} err]} {
+            puts "  WARN: Could not remove port $port_obj: $err"
+        } else {
+            incr removed_count
+        }
+    }
+}
+puts "  Removed $removed_count unconstrained port(s) from netlist"
+
+# ---- Run implementation steps ----
+opt_design -directive Explore
+place_design -directive Explore
+phys_opt_design -directive AggressiveExplore
+route_design -directive Explore
+phys_opt_design -directive AggressiveExplore
+
+set impl_elapsed [expr {[clock seconds] - $impl_start}]
+puts "  Implementation time: ${impl_elapsed}s"
 
 # ===== BITSTREAM =====
 set bit_start [clock seconds]
-if {[catch {launch_runs impl_1 -to_step write_bitstream -jobs 8} launch_err]} {
-    puts "  Note: write_bitstream may already be in progress: $launch_err"
-}
-wait_on_run impl_1
-set bit_elapsed [expr {[clock seconds] - $bit_start}]
-
-open_run impl_1
-
-# Copy bitstream
-set src_bit [file join $project_dir "${project_name}.runs" "impl_1" "radar_system_top.bit"]
 set dst_bit [file join $bit_dir "radar_system_top_50t.bit"]
-if {[file exists $src_bit]} {
-    file copy -force $src_bit $dst_bit
-    puts "  Bitstream: $dst_bit"
+write_bitstream -force $dst_bit
+set bit_elapsed [expr {[clock seconds] - $bit_start}]
+if {[file exists $dst_bit]} {
+    puts "  Bitstream: $dst_bit ([expr {[file size $dst_bit] / 1024}] KB)"
 } else {
-    puts "  WARNING: Bitstream not found at $src_bit"
+    puts "  WARNING: Bitstream not generated!"
 }
 
 # ===== REPORTS =====
