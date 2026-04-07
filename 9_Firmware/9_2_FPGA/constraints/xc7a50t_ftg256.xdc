@@ -20,9 +20,10 @@
 # DRC Fix History:
 #   - PLIO-9: Moved clk_120m_dac from C13 (N-type) to D13 (P-type MRCC).
 #     Clock inputs must use the P-type pin of a Multi-Region Clock-Capable pair.
-#   - BIVC-1: Disabled DIFF_TERM on Bank 14 LVDS pairs (adc_dco, adc_d) to
-#     resolve VCCO conflict with single-ended adc_pwdn (LVCMOS33) on T5.
-#     External 100-ohm differential termination required on board.
+#   - BIVC-1: Root cause was IBUFDS primitives in ad9484_interface_400m.v
+#     hardcoded to LVDS_25 (VCCO=2.5V), conflicting with adc_pwdn LVCMOS33
+#     (VCCO=3.3V) in Bank 14. Fixed by changing RTL to IOSTANDARD("DEFAULT")
+#     so each target's XDC controls the standard (LVDS_33 here, LVDS_25 on 200T).
 # ============================================================================
 
 # ============================================================================
@@ -54,11 +55,7 @@ set_property PACKAGE_PIN N14 [get_ports {adc_dco_p}]
 set_property PACKAGE_PIN P14 [get_ports {adc_dco_n}]
 set_property IOSTANDARD LVDS_33 [get_ports {adc_dco_p}]
 set_property IOSTANDARD LVDS_33 [get_ports {adc_dco_n}]
-# NOTE: DIFF_TERM disabled to avoid BIVC-1 DRC conflict with single-ended
-# adc_pwdn (LVCMOS33) on T5 in the same bank. The board should have external
-# 100-ohm differential termination on the ADC LVDS pairs. If signal integrity
-# issues arise, the board may need adc_pwdn relocated to a non-Bank-14 pin.
-# set_property DIFF_TERM TRUE [get_ports {adc_dco_p}]
+set_property DIFF_TERM TRUE [get_ports {adc_dco_p}]
 create_clock -name adc_dco_p -period 2.5 [get_ports {adc_dco_p}]
 set_input_jitter [get_clocks adc_dco_p] 0.05
 
@@ -217,10 +214,9 @@ set_property IOSTANDARD LVCMOS33 [get_ports {adc_pwdn}]
 set_property IOSTANDARD LVDS_33 [get_ports {adc_d_p[*]}]
 set_property IOSTANDARD LVDS_33 [get_ports {adc_d_n[*]}]
 
-# Differential termination — disabled to avoid BIVC-1 DRC conflict with
-# single-ended adc_pwdn (LVCMOS33) on T5 in the same bank. Requires external
-# 100-ohm differential termination on the board for proper LVDS signal integrity.
-# set_property DIFF_TERM TRUE [get_ports {adc_d_p[*]}]
+# Differential termination — Bank 14 VCCO = 3.3V, compatible with LVDS_33.
+# RTL IBUFDS uses DIFF_TERM("FALSE") so this XDC property takes precedence.
+set_property DIFF_TERM TRUE [get_ports {adc_d_p[*]}]
 
 # Input delay for ADC data relative to DCO (adjust based on PCB trace length)
 set_input_delay -clock [get_clocks adc_dco_p] -max 1.0 [get_ports {adc_d_p[*]}]
