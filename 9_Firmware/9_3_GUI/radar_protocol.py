@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Dict, Any
 from enum import IntEnum
-from collections import deque
+
 
 import numpy as np
 
@@ -764,13 +764,20 @@ class ReplayConnection:
                 dq = int(np.clip(dop_q[rbin, dbin], -32768, 32767))
                 d = 1 if det[rbin, dbin] else 0
 
-                buf[pos] = HEADER_BYTE; pos += 1
-                buf[pos:pos+2] = rq_bytes; pos += 2
-                buf[pos:pos+2] = ri_bytes; pos += 2
-                buf[pos:pos+2] = struct.pack(">h", di); pos += 2
-                buf[pos:pos+2] = struct.pack(">h", dq); pos += 2
-                buf[pos] = d; pos += 1
-                buf[pos] = FOOTER_BYTE; pos += 1
+                buf[pos] = HEADER_BYTE
+                pos += 1
+                buf[pos:pos+2] = rq_bytes
+                pos += 2
+                buf[pos:pos+2] = ri_bytes
+                pos += 2
+                buf[pos:pos+2] = struct.pack(">h", di)
+                pos += 2
+                buf[pos:pos+2] = struct.pack(">h", dq)
+                pos += 2
+                buf[pos] = d
+                pos += 1
+                buf[pos] = FOOTER_BYTE
+                pos += 1
 
         return bytes(buf)
 

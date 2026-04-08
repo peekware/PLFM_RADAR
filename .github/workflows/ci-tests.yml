@@ -8,6 +8,34 @@ on:
 
 jobs:
   # ===========================================================================
+  # Job 0: Ruff Lint (active Python files only)
+  # Excludes legacy GUI_V*.py files and untracked v7/ directory
+  # ===========================================================================
+  lint:
+    name: Ruff Lint (active files)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff on active files
+        run: |
+          ruff check \
+            9_Firmware/9_3_GUI/radar_protocol.py \
+            9_Firmware/9_3_GUI/radar_dashboard.py \
+            9_Firmware/9_3_GUI/smoke_test.py \
+            9_Firmware/9_3_GUI/test_radar_dashboard.py
+
+  # ===========================================================================
   # Job 1: Python Host Software Tests (58 tests)
   # radar_protocol, radar_dashboard, FT2232H connection, replay, opcodes, e2e
   # ===========================================================================

@@ -21,7 +21,6 @@ Usage:
   python radar_dashboard.py --record     # Launch with HDF5 recording
 """
 
-import sys
 import os
 import time
 import queue
@@ -45,7 +44,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from radar_protocol import (
     RadarProtocol, FT2232HConnection, ReplayConnection,
     DataRecorder, RadarAcquisition,
-    RadarFrame, StatusResponse, Opcode,
+    RadarFrame, StatusResponse,
     NUM_RANGE_BINS, NUM_DOPPLER_BINS, WATERFALL_DEPTH,
 )
 
