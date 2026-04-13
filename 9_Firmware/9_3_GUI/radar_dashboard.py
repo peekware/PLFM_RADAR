@@ -111,6 +111,16 @@ class RadarDashboard:
         self._vmax_ema = 1000.0
         self._vmax_alpha = 0.15  # smoothing factor (lower = more stable)
 
+        # AGC visualization history (ring buffers, ~60s at 10 Hz)
+        self._agc_history_len = 256
+        self._agc_gain_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_peak_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_sat_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_time_history: deque[float] = deque(maxlen=self._agc_history_len)
+        self._agc_t0: float = time.time()
+        self._agc_last_redraw: float = 0.0  # throttle chart redraws
+        self._AGC_REDRAW_INTERVAL: float = 0.5  # seconds between redraws
+
         self._build_ui()
         self._schedule_update()
 
@@ -162,13 +172,16 @@ class RadarDashboard:
 
         tab_display = ttk.Frame(nb)
         tab_control = ttk.Frame(nb)
+        tab_agc = ttk.Frame(nb)
         tab_log = ttk.Frame(nb)
         nb.add(tab_display, text="  Display  ")
         nb.add(tab_control, text="  Control  ")
+        nb.add(tab_agc, text="  AGC Monitor  ")
         nb.add(tab_log, text="  Log  ")
 
         self._build_display_tab(tab_display)
         self._build_control_tab(tab_control)
+        self._build_agc_tab(tab_agc)
         self._build_log_tab(tab_log)
 
     def _build_display_tab(self, parent):
@@ -474,6 +487,91 @@ class RadarDashboard:
             var.set(str(clamped))
         self._send_cmd(opcode, clamped)
 
+    def _build_agc_tab(self, parent):
+        """AGC Monitor tab — real-time strip charts for gain, peak, and saturation."""
+        # Top row: AGC status badge + saturation indicator
+        top = ttk.Frame(parent)
+        top.pack(fill="x", padx=8, pady=(8, 0))
+
+        self._agc_badge = ttk.Label(
+            top, text="AGC: --", font=("Menlo", 14, "bold"), foreground=FG)
+        self._agc_badge.pack(side="left", padx=(0, 24))
+
+        self._agc_sat_badge = ttk.Label(
+            top, text="Saturation: 0", font=("Menlo", 12), foreground=GREEN)
+        self._agc_sat_badge.pack(side="left", padx=(0, 24))
+
+        self._agc_gain_value = ttk.Label(
+            top, text="Gain: --", font=("Menlo", 12), foreground=ACCENT)
+        self._agc_gain_value.pack(side="left", padx=(0, 24))
+
+        self._agc_peak_value = ttk.Label(
+            top, text="Peak: --", font=("Menlo", 12), foreground=ACCENT)
+        self._agc_peak_value.pack(side="left")
+
+        # Matplotlib figure with 3 stacked subplots sharing x-axis (time)
+        self._agc_fig = Figure(figsize=(14, 7), facecolor=BG)
+        self._agc_fig.subplots_adjust(
+            left=0.07, right=0.98, top=0.95, bottom=0.08,
+            hspace=0.30)
+
+        # Subplot 1: FPGA inner-loop gain (4-bit, 0-15)
+        self._ax_gain = self._agc_fig.add_subplot(3, 1, 1)
+        self._ax_gain.set_facecolor(BG2)
+        self._ax_gain.set_title("FPGA AGC Gain (inner loop)", color=FG, fontsize=10)
+        self._ax_gain.set_ylabel("Gain Level", color=FG)
+        self._ax_gain.set_ylim(-0.5, 15.5)
+        self._ax_gain.tick_params(colors=FG)
+        self._ax_gain.set_xlim(0, self._agc_history_len)
+        self._gain_line, = self._ax_gain.plot(
+            [], [], color=ACCENT, linewidth=1.5, label="Gain")
+        self._ax_gain.axhline(y=0, color=RED, linewidth=0.5, alpha=0.5, linestyle="--")
+        self._ax_gain.axhline(y=15, color=RED, linewidth=0.5, alpha=0.5, linestyle="--")
+        for spine in self._ax_gain.spines.values():
+            spine.set_color(SURFACE)
+
+        # Subplot 2: Peak magnitude (8-bit, 0-255)
+        self._ax_peak = self._agc_fig.add_subplot(3, 1, 2)
+        self._ax_peak.set_facecolor(BG2)
+        self._ax_peak.set_title("Peak Magnitude", color=FG, fontsize=10)
+        self._ax_peak.set_ylabel("Peak (8-bit)", color=FG)
+        self._ax_peak.set_ylim(-5, 260)
+        self._ax_peak.tick_params(colors=FG)
+        self._ax_peak.set_xlim(0, self._agc_history_len)
+        self._peak_line, = self._ax_peak.plot(
+            [], [], color=YELLOW, linewidth=1.5, label="Peak")
+        # AGC target reference line (default 200)
+        self._agc_target_line = self._ax_peak.axhline(
+            y=200, color=GREEN, linewidth=1.0, alpha=0.7, linestyle="--",
+            label="Target (200)")
+        self._ax_peak.legend(loc="upper right", fontsize=8,
+                             facecolor=BG2, edgecolor=SURFACE,
+                             labelcolor=FG)
+        for spine in self._ax_peak.spines.values():
+            spine.set_color(SURFACE)
+
+        # Subplot 3: Saturation count (8-bit, 0-255) as bar-style fill
+        self._ax_sat = self._agc_fig.add_subplot(3, 1, 3)
+        self._ax_sat.set_facecolor(BG2)
+        self._ax_sat.set_title("Saturation Count", color=FG, fontsize=10)
+        self._ax_sat.set_ylabel("Sat Count", color=FG)
+        self._ax_sat.set_xlabel("Sample Index", color=FG)
+        self._ax_sat.set_ylim(-1, 40)
+        self._ax_sat.tick_params(colors=FG)
+        self._ax_sat.set_xlim(0, self._agc_history_len)
+        self._sat_fill = self._ax_sat.fill_between(
+            [], [], color=RED, alpha=0.6, label="Saturation")
+        self._sat_line, = self._ax_sat.plot(
+            [], [], color=RED, linewidth=1.0)
+        self._ax_sat.axhline(y=0, color=GREEN, linewidth=0.5, alpha=0.5, linestyle="--")
+        for spine in self._ax_sat.spines.values():
+            spine.set_color(SURFACE)
+
+        agc_canvas = FigureCanvasTkAgg(self._agc_fig, master=parent)
+        agc_canvas.draw()
+        agc_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._agc_canvas = agc_canvas
+
     def _build_log_tab(self, parent):
         self.log_text = tk.Text(parent, bg=BG2, fg=FG, font=("Menlo", 10),
                                  insertbackground=FG, wrap="word")
@@ -608,6 +706,79 @@ class RadarDashboard:
             self._agc_labels["sat"].config(
                 text=f"Sat Count: {status.agc_saturation_count}",
                 foreground=sat_color)
+
+        # AGC visualization update
+        self._update_agc_visualization(status)
+
+    def _update_agc_visualization(self, status: StatusResponse):
+        """Push AGC metrics into ring buffers and redraw strip charts.
+
+        Data is always accumulated (cheap), but matplotlib redraws are
+        throttled to ``_AGC_REDRAW_INTERVAL`` seconds to avoid saturating
+        the GUI event-loop when status packets arrive at 20 Hz.
+        """
+        if not hasattr(self, '_agc_canvas'):
+            return
+
+        # Append to ring buffers (always — this is O(1))
+        self._agc_gain_history.append(status.agc_current_gain)
+        self._agc_peak_history.append(status.agc_peak_magnitude)
+        self._agc_sat_history.append(status.agc_saturation_count)
+
+        # Update indicator labels (cheap Tk config calls)
+        mode_str = "AUTO" if status.agc_enable else "MANUAL"
+        mode_color = GREEN if status.agc_enable else FG
+        self._agc_badge.config(text=f"AGC: {mode_str}", foreground=mode_color)
+        self._agc_current_gain_lbl.config(
+            text=f"Current Gain: {status.agc_current_gain}")
+        self._agc_current_peak_lbl.config(
+            text=f"Peak Mag: {status.agc_peak_magnitude}")
+
+        total_sat = sum(self._agc_sat_history)
+        if total_sat > 10:
+            sat_color = RED
+        elif total_sat > 0:
+            sat_color = YELLOW
+        else:
+            sat_color = GREEN
+        self._agc_sat_total_lbl.config(
+            text=f"Total Saturations: {total_sat}", foreground=sat_color)
+
+        # ---- Throttle matplotlib redraws ---------------------------------
+        now = time.monotonic()
+        if now - self._agc_last_redraw < self._AGC_REDRAW_INTERVAL:
+            return
+        self._agc_last_redraw = now
+
+        n = len(self._agc_gain_history)
+        xs = list(range(n))
+
+        # Update line plots
+        gain_data = list(self._agc_gain_history)
+        peak_data = list(self._agc_peak_history)
+        sat_data = list(self._agc_sat_history)
+
+        self._gain_line.set_data(xs, gain_data)
+        self._peak_line.set_data(xs, peak_data)
+
+        # Saturation: redraw as filled area
+        self._sat_line.set_data(xs, sat_data)
+        if self._sat_fill is not None:
+            self._sat_fill.remove()
+        self._sat_fill = self._ax_sat.fill_between(
+            xs, sat_data, color=RED, alpha=0.4)
+
+        # Auto-scale saturation Y axis to data
+        max_sat = max(sat_data) if sat_data else 0
+        self._ax_sat.set_ylim(-1, max(max_sat * 1.5, 5))
+
+        # Scroll X axis to keep latest data visible
+        if n >= self._agc_history_len:
+            self._ax_gain.set_xlim(0, n)
+            self._ax_peak.set_xlim(0, n)
+            self._ax_sat.set_xlim(0, n)
+
+        self._agc_canvas.draw_idle()
 
     # --------------------------------------------------------- Display loop
     def _schedule_update(self):

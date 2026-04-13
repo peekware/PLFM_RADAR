@@ -1,15 +1,16 @@
 """
 v7.dashboard — Main application window for the PLFM Radar GUI V7.
 
-RadarDashboard is a QMainWindow with five tabs:
+RadarDashboard is a QMainWindow with six tabs:
   1. Main View   — Range-Doppler matplotlib canvas (64x32), device combos,
                    Start/Stop, targets table
   2. Map View    — Embedded Leaflet map + sidebar
   3. FPGA Control — Full FPGA register control panel (all 27 opcodes incl. AGC,
                     bit-width validation, grouped layout matching production)
-  4. Diagnostics — Connection indicators, packet stats, dependency status,
+  4. AGC Monitor — Real-time AGC strip charts (gain, peak magnitude, saturation)
+  5. Diagnostics — Connection indicators, packet stats, dependency status,
                    self-test results, log viewer
-  5. Settings    — Host-side DSP parameters + About section
+  6. Settings    — Host-side DSP parameters + About section
 
 Uses production radar_protocol.py for all FPGA communication:
   - FT2232HConnection for real hardware
@@ -23,6 +24,7 @@ commands sent over FT2232H.
 
 import time
 import logging
+from collections import deque
 
 import numpy as np
 
@@ -152,6 +154,14 @@ class RadarDashboard(QMainWindow):
 
         # FPGA control parameter widgets
         self._param_spins: dict = {}  # opcode_hex -> QSpinBox
+
+        # AGC visualization history (ring buffers)
+        self._agc_history_len = 256
+        self._agc_gain_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_peak_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_sat_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_last_redraw: float = 0.0  # throttle chart redraws
+        self._AGC_REDRAW_INTERVAL: float = 0.5  # seconds between redraws
 
         # ---- Build UI ------------------------------------------------------
         self._apply_dark_theme()
@@ -306,6 +316,7 @@ class RadarDashboard(QMainWindow):
         self._create_main_tab()
         self._create_map_tab()
         self._create_fpga_control_tab()
+        self._create_agc_monitor_tab()
         self._create_diagnostics_tab()
         self._create_settings_tab()
 
@@ -783,7 +794,122 @@ class RadarDashboard(QMainWindow):
         parent_layout.addLayout(row)
 
     # -----------------------------------------------------------------
-    # TAB 4: Diagnostics
+    # TAB 4: AGC Monitor
+    # -----------------------------------------------------------------
+
+    def _create_agc_monitor_tab(self):
+        """AGC Monitor — real-time strip charts for FPGA inner-loop AGC."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # ---- Top indicator row ---------------------------------------------
+        indicator = QFrame()
+        indicator.setStyleSheet(
+            f"background-color: {DARK_ACCENT}; border-radius: 4px;")
+        ind_layout = QHBoxLayout(indicator)
+        ind_layout.setContentsMargins(12, 8, 12, 8)
+
+        self._agc_mode_lbl = QLabel("AGC: --")
+        self._agc_mode_lbl.setStyleSheet(
+            f"color: {DARK_FG}; font-size: 16px; font-weight: bold;")
+        ind_layout.addWidget(self._agc_mode_lbl)
+
+        self._agc_gain_lbl = QLabel("Gain: --")
+        self._agc_gain_lbl.setStyleSheet(
+            f"color: {DARK_INFO}; font-size: 14px;")
+        ind_layout.addWidget(self._agc_gain_lbl)
+
+        self._agc_peak_lbl = QLabel("Peak: --")
+        self._agc_peak_lbl.setStyleSheet(
+            f"color: {DARK_INFO}; font-size: 14px;")
+        ind_layout.addWidget(self._agc_peak_lbl)
+
+        self._agc_sat_total_lbl = QLabel("Total Saturations: 0")
+        self._agc_sat_total_lbl.setStyleSheet(
+            f"color: {DARK_SUCCESS}; font-size: 14px; font-weight: bold;")
+        ind_layout.addWidget(self._agc_sat_total_lbl)
+
+        ind_layout.addStretch()
+        layout.addWidget(indicator)
+
+        # ---- Matplotlib figure with 3 subplots -----------------------------
+        agc_fig = Figure(figsize=(12, 7), facecolor=DARK_BG)
+        agc_fig.subplots_adjust(
+            left=0.07, right=0.96, top=0.95, bottom=0.07,
+            hspace=0.32)
+
+        # Subplot 1: Gain history (4-bit, 0-15)
+        self._agc_ax_gain = agc_fig.add_subplot(3, 1, 1)
+        self._agc_ax_gain.set_facecolor(DARK_ACCENT)
+        self._agc_ax_gain.set_ylabel("Gain Code", color=DARK_FG, fontsize=10)
+        self._agc_ax_gain.set_title(
+            "FPGA Inner-Loop Gain (4-bit)", color=DARK_FG, fontsize=11)
+        self._agc_ax_gain.set_ylim(-0.5, 15.5)
+        self._agc_ax_gain.tick_params(colors=DARK_FG, labelsize=9)
+        self._agc_ax_gain.set_xlim(0, self._agc_history_len)
+        for spine in self._agc_ax_gain.spines.values():
+            spine.set_color(DARK_BORDER)
+        self._agc_gain_line, = self._agc_ax_gain.plot(
+            [], [], color="#89b4fa", linewidth=1.5, label="Gain")
+        self._agc_ax_gain.axhline(y=7.5, color=DARK_WARNING, linestyle="--",
+                                  linewidth=0.8, alpha=0.5, label="Midpoint")
+        self._agc_ax_gain.legend(
+            loc="upper right", fontsize=8,
+            facecolor=DARK_ACCENT, edgecolor=DARK_BORDER,
+            labelcolor=DARK_FG)
+
+        # Subplot 2: Peak magnitude (8-bit, 0-255)
+        self._agc_ax_peak = agc_fig.add_subplot(
+            3, 1, 2, sharex=self._agc_ax_gain)
+        self._agc_ax_peak.set_facecolor(DARK_ACCENT)
+        self._agc_ax_peak.set_ylabel("Peak Mag", color=DARK_FG, fontsize=10)
+        self._agc_ax_peak.set_title(
+            "ADC Peak Magnitude (8-bit)", color=DARK_FG, fontsize=11)
+        self._agc_ax_peak.set_ylim(-5, 260)
+        self._agc_ax_peak.tick_params(colors=DARK_FG, labelsize=9)
+        for spine in self._agc_ax_peak.spines.values():
+            spine.set_color(DARK_BORDER)
+        self._agc_peak_line, = self._agc_ax_peak.plot(
+            [], [], color=DARK_SUCCESS, linewidth=1.5, label="Peak")
+        self._agc_ax_peak.axhline(y=200, color=DARK_WARNING, linestyle="--",
+                                  linewidth=0.8, alpha=0.5,
+                                  label="Target (200)")
+        self._agc_ax_peak.axhspan(240, 255, alpha=0.15, color=DARK_ERROR,
+                                  label="Sat Zone")
+        self._agc_ax_peak.legend(
+            loc="upper right", fontsize=8,
+            facecolor=DARK_ACCENT, edgecolor=DARK_BORDER,
+            labelcolor=DARK_FG)
+
+        # Subplot 3: Saturation count per update (8-bit, 0-255)
+        self._agc_ax_sat = agc_fig.add_subplot(
+            3, 1, 3, sharex=self._agc_ax_gain)
+        self._agc_ax_sat.set_facecolor(DARK_ACCENT)
+        self._agc_ax_sat.set_ylabel("Sat Count", color=DARK_FG, fontsize=10)
+        self._agc_ax_sat.set_xlabel(
+            "Sample (newest right)", color=DARK_FG, fontsize=10)
+        self._agc_ax_sat.set_title(
+            "Saturation Events per Update", color=DARK_FG, fontsize=11)
+        self._agc_ax_sat.set_ylim(-1, 10)
+        self._agc_ax_sat.tick_params(colors=DARK_FG, labelsize=9)
+        for spine in self._agc_ax_sat.spines.values():
+            spine.set_color(DARK_BORDER)
+        self._agc_sat_line, = self._agc_ax_sat.plot(
+            [], [], color=DARK_ERROR, linewidth=1.0)
+        self._agc_sat_fill_artist = None
+        self._agc_ax_sat.legend(
+            loc="upper right", fontsize=8,
+            facecolor=DARK_ACCENT, edgecolor=DARK_BORDER,
+            labelcolor=DARK_FG)
+
+        self._agc_canvas = FigureCanvasQTAgg(agc_fig)
+        layout.addWidget(self._agc_canvas, stretch=1)
+
+        self._tabs.addTab(tab, "AGC Monitor")
+
+    # -----------------------------------------------------------------
+    # TAB 5: Diagnostics
     # -----------------------------------------------------------------
 
     def _create_diagnostics_tab(self):
@@ -1334,6 +1460,80 @@ class RadarDashboard(QMainWindow):
                 f"color: {sat_color}; font-weight: bold;")
             self._agc_labels["sat"].setText(
                 f"Sat Count: {st.agc_saturation_count}")
+
+        # AGC Monitor tab visualization
+        self._update_agc_visualization(st)
+
+    def _update_agc_visualization(self, st: StatusResponse):
+        """Push AGC metrics into ring buffers and redraw AGC Monitor charts.
+
+        Data is always accumulated (cheap), but matplotlib redraws are
+        throttled to ``_AGC_REDRAW_INTERVAL`` seconds to avoid saturating
+        the GUI event-loop when status packets arrive at 20 Hz.
+        """
+        if not hasattr(self, '_agc_canvas'):
+            return
+
+        # Push data into ring buffers (always — O(1))
+        self._agc_gain_history.append(st.agc_current_gain)
+        self._agc_peak_history.append(st.agc_peak_magnitude)
+        self._agc_sat_history.append(st.agc_saturation_count)
+
+        # Update indicator labels (cheap Qt calls)
+        agc_str = "AUTO" if st.agc_enable else "MANUAL"
+        agc_color = DARK_SUCCESS if st.agc_enable else DARK_INFO
+        self._agc_mode_lbl.setStyleSheet(
+            f"color: {agc_color}; font-size: 16px; font-weight: bold;")
+        self._agc_mode_lbl.setText(f"AGC: {agc_str}")
+        self._agc_gain_lbl.setText(f"Gain: {st.agc_current_gain}")
+        self._agc_peak_lbl.setText(f"Peak: {st.agc_peak_magnitude}")
+
+        total_sat = sum(self._agc_sat_history)
+        if total_sat > 10:
+            sat_color = DARK_ERROR
+        elif total_sat > 0:
+            sat_color = DARK_WARNING
+        else:
+            sat_color = DARK_SUCCESS
+        self._agc_sat_total_lbl.setStyleSheet(
+            f"color: {sat_color}; font-size: 14px; font-weight: bold;")
+        self._agc_sat_total_lbl.setText(f"Total Saturations: {total_sat}")
+
+        # ---- Throttle matplotlib redraws ---------------------------------
+        now = time.monotonic()
+        if now - self._agc_last_redraw < self._AGC_REDRAW_INTERVAL:
+            return
+        self._agc_last_redraw = now
+
+        n = len(self._agc_gain_history)
+        xs = list(range(n))
+
+        # Update line plots
+        gain_data = list(self._agc_gain_history)
+        peak_data = list(self._agc_peak_history)
+        sat_data = list(self._agc_sat_history)
+
+        self._agc_gain_line.set_data(xs, gain_data)
+        self._agc_peak_line.set_data(xs, peak_data)
+        self._agc_sat_line.set_data(xs, sat_data)
+
+        # Update saturation fill
+        if self._agc_sat_fill_artist is not None:
+            self._agc_sat_fill_artist.remove()
+        if n > 0:
+            self._agc_sat_fill_artist = self._agc_ax_sat.fill_between(
+                xs, sat_data, color=DARK_ERROR, alpha=0.4)
+        else:
+            self._agc_sat_fill_artist = None
+
+        # Auto-scale saturation y-axis
+        max_sat = max(sat_data) if sat_data else 1
+        self._agc_ax_sat.set_ylim(-1, max(max_sat * 1.3, 5))
+
+        # Scroll x-axis
+        self._agc_ax_gain.set_xlim(max(0, n - self._agc_history_len), n)
+
+        self._agc_canvas.draw_idle()
 
     # =====================================================================
     # Position / coverage callbacks (map sidebar)

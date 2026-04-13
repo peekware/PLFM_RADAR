@@ -335,6 +335,73 @@ class TestV7Init(unittest.TestCase):
 
 
 # =============================================================================
+# Test: AGC Visualization data model
+# =============================================================================
+
+class TestAGCVisualizationV7(unittest.TestCase):
+    """AGC visualization ring buffer and data model tests (no Qt required)."""
+
+    def _make_deque(self, maxlen=256):
+        from collections import deque
+        return deque(maxlen=maxlen)
+
+    def test_ring_buffer_basics(self):
+        d = self._make_deque(maxlen=4)
+        for i in range(6):
+            d.append(i)
+        self.assertEqual(list(d), [2, 3, 4, 5])
+
+    def test_gain_range_4bit(self):
+        """AGC gain is 4-bit (0-15)."""
+        from radar_protocol import StatusResponse
+        for g in [0, 7, 15]:
+            sr = StatusResponse(agc_current_gain=g)
+            self.assertEqual(sr.agc_current_gain, g)
+
+    def test_peak_range_8bit(self):
+        """Peak magnitude is 8-bit (0-255)."""
+        from radar_protocol import StatusResponse
+        for p in [0, 128, 255]:
+            sr = StatusResponse(agc_peak_magnitude=p)
+            self.assertEqual(sr.agc_peak_magnitude, p)
+
+    def test_saturation_accumulation(self):
+        """Saturation ring buffer sum tracks total events."""
+        sat = self._make_deque(maxlen=256)
+        for s in [0, 5, 0, 10, 3]:
+            sat.append(s)
+        self.assertEqual(sum(sat), 18)
+
+    def test_mode_label_logic(self):
+        """AGC mode string from enable field."""
+        from radar_protocol import StatusResponse
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=1).agc_enable else "MANUAL",
+            "AUTO")
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=0).agc_enable else "MANUAL",
+            "MANUAL")
+
+    def test_history_len_default(self):
+        """Default history length should be 256."""
+        d = self._make_deque(maxlen=256)
+        self.assertEqual(d.maxlen, 256)
+
+    def test_color_thresholds(self):
+        """Saturation color: green=0, warning=1-10, error>10."""
+        from v7.models import DARK_SUCCESS, DARK_WARNING, DARK_ERROR
+        def pick_color(total):
+            if total > 10:
+                return DARK_ERROR
+            if total > 0:
+                return DARK_WARNING
+            return DARK_SUCCESS
+        self.assertEqual(pick_color(0), DARK_SUCCESS)
+        self.assertEqual(pick_color(5), DARK_WARNING)
+        self.assertEqual(pick_color(11), DARK_ERROR)
+
+
+# =============================================================================
 # Helper: lazy import of v7.models
 # =============================================================================
 

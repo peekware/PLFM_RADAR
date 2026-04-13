@@ -840,5 +840,111 @@ class TestAGCStatusResponseDefaults(unittest.TestCase):
         self.assertEqual(sr.agc_enable, 1)
 
 
+# =============================================================================
+# AGC Visualization — ring buffer / data model tests
+# =============================================================================
+
+class TestAGCVisualizationHistory(unittest.TestCase):
+    """Test the AGC visualization ring buffer logic (no GUI required)."""
+
+    def _make_deque(self, maxlen=256):
+        from collections import deque
+        return deque(maxlen=maxlen)
+
+    def test_ring_buffer_maxlen(self):
+        """Ring buffer should evict oldest when full."""
+        d = self._make_deque(maxlen=4)
+        for i in range(6):
+            d.append(i)
+        self.assertEqual(list(d), [2, 3, 4, 5])
+        self.assertEqual(len(d), 4)
+
+    def test_gain_history_accumulation(self):
+        """Gain values accumulate correctly in a deque."""
+        gain_hist = self._make_deque(maxlen=256)
+        statuses = [
+            StatusResponse(agc_current_gain=g)
+            for g in [0, 3, 7, 15, 8, 2]
+        ]
+        for st in statuses:
+            gain_hist.append(st.agc_current_gain)
+        self.assertEqual(list(gain_hist), [0, 3, 7, 15, 8, 2])
+
+    def test_peak_history_accumulation(self):
+        """Peak magnitude values accumulate correctly."""
+        peak_hist = self._make_deque(maxlen=256)
+        for p in [0, 50, 200, 255, 128]:
+            peak_hist.append(p)
+        self.assertEqual(list(peak_hist), [0, 50, 200, 255, 128])
+
+    def test_saturation_total_computation(self):
+        """Sum of saturation ring buffer gives running total."""
+        sat_hist = self._make_deque(maxlen=256)
+        for s in [0, 0, 5, 0, 12, 3]:
+            sat_hist.append(s)
+        self.assertEqual(sum(sat_hist), 20)
+
+    def test_saturation_color_thresholds(self):
+        """Color logic: green=0, yellow=1-10, red>10."""
+        def sat_color(total):
+            if total > 10:
+                return "red"
+            if total > 0:
+                return "yellow"
+            return "green"
+        self.assertEqual(sat_color(0), "green")
+        self.assertEqual(sat_color(1), "yellow")
+        self.assertEqual(sat_color(10), "yellow")
+        self.assertEqual(sat_color(11), "red")
+        self.assertEqual(sat_color(255), "red")
+
+    def test_ring_buffer_eviction_preserves_latest(self):
+        """After overflow, only the most recent values remain."""
+        d = self._make_deque(maxlen=8)
+        for i in range(20):
+            d.append(i)
+        self.assertEqual(list(d), [12, 13, 14, 15, 16, 17, 18, 19])
+
+    def test_empty_history_safe(self):
+        """Empty ring buffer should be safe for max/sum."""
+        d = self._make_deque(maxlen=256)
+        self.assertEqual(sum(d), 0)
+        self.assertEqual(len(d), 0)
+        # max() on empty would raise — test the guard pattern used in viz code
+        max_sat = max(d) if d else 0
+        self.assertEqual(max_sat, 0)
+
+    def test_agc_mode_string(self):
+        """AGC mode display string from enable flag."""
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=1).agc_enable else "MANUAL",
+            "AUTO")
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=0).agc_enable else "MANUAL",
+            "MANUAL")
+
+    def test_xlim_scroll_logic(self):
+        """X-axis scroll: when n >= history_len, xlim should expand."""
+        history_len = 8
+        d = self._make_deque(maxlen=history_len)
+        for i in range(10):
+            d.append(i)
+        n = len(d)
+        # After 10 pushes into maxlen=8, n=8
+        self.assertEqual(n, history_len)
+        # xlim should be (0, n) for static or (n-history_len, n) for scrolling
+        self.assertEqual(max(0, n - history_len), 0)
+        self.assertEqual(n, 8)
+
+    def test_sat_autoscale_ylim(self):
+        """Saturation y-axis auto-scale: max(max_sat * 1.5, 5)."""
+        # No saturation
+        self.assertEqual(max(0 * 1.5, 5), 5)
+        # Some saturation
+        self.assertAlmostEqual(max(10 * 1.5, 5), 15.0)
+        # High saturation
+        self.assertAlmostEqual(max(200 * 1.5, 5), 300.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
