@@ -23,6 +23,7 @@
 #include "usbd_cdc_if.h"
 #include "adar1000.h"
 #include "ADAR1000_Manager.h"
+#include "ADAR1000_AGC.h"
 extern "C" {
 #include "ad9523.h"
 }
@@ -224,6 +225,7 @@ extern SPI_HandleTypeDef hspi4;
 //ADAR1000
 
 ADAR1000Manager adarManager;
+ADAR1000_AGC    outerAgc;
 static uint8_t matrix1[15][16];
 static uint8_t matrix2[15][16];
 static uint8_t vector_0[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -2113,6 +2115,15 @@ int main(void)
 	 //steering angle (rad)= arcsin(phase_dif/Pi)
 
       runRadarPulseSequence();
+
+      /* [AGC] Outer-loop AGC: read FPGA saturation flag (DIG_5 / PD13),
+       * adjust ADAR1000 VGA common gain once per radar frame (~258 ms). */
+      {
+          bool sat = HAL_GPIO_ReadPin(FPGA_DIG5_SAT_GPIO_Port,
+                                      FPGA_DIG5_SAT_Pin) == GPIO_PIN_SET;
+          outerAgc.update(sat);
+          outerAgc.applyGain(adarManager);
+      }
 
       /* [GAP-3 FIX 2] Kick hardware watchdog — if we don't reach here within
        * ~4 s, the IWDG resets the MCU automatically. */

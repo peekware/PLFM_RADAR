@@ -16,9 +16,16 @@
 ################################################################################
 
 CC       := cc
+CXX      := c++
 CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter -g -O0
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g -O0
 # Shim headers come FIRST so they override real headers
 INCLUDES := -Ishims -I. -I../9_1_1_C_Cpp_Libraries
+
+# C++ library directory (AGC, ADAR1000 Manager)
+CXX_LIB_DIR := ../9_1_1_C_Cpp_Libraries
+CXX_SRCS    := $(CXX_LIB_DIR)/ADAR1000_AGC.cpp $(CXX_LIB_DIR)/ADAR1000_Manager.cpp
+CXX_OBJS    := ADAR1000_AGC.o ADAR1000_Manager.o
 
 # Real source files compiled against mock headers
 REAL_SRC := ../9_1_1_C_Cpp_Libraries/adf4382a_manager.c
@@ -62,7 +69,10 @@ TESTS_STANDALONE := test_bug12_pa_cal_loop_inverted \
 # Tests that need platform_noos_stm32.o + mocks
 TESTS_WITH_PLATFORM := test_bug11_platform_spi_transmit_only
 
-ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY) $(TESTS_STANDALONE) $(TESTS_WITH_PLATFORM)
+# C++ tests (AGC outer loop)
+TESTS_WITH_CXX := test_agc_outer_loop
+
+ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY) $(TESTS_STANDALONE) $(TESTS_WITH_PLATFORM) $(TESTS_WITH_CXX)
 
 .PHONY: all build test clean \
         $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11 bug12 bug13 bug14 bug15) \
@@ -155,6 +165,24 @@ test_gap3_emergency_state_ordering: test_gap3_emergency_state_ordering.c
 # Tests that need platform_noos_stm32.o + mocks
 $(TESTS_WITH_PLATFORM): %: %.c $(MOCK_OBJS) $(PLATFORM_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(MOCK_OBJS) $(PLATFORM_OBJ) -o $@
+
+# --- C++ object rules ---
+
+ADAR1000_AGC.o: $(CXX_LIB_DIR)/ADAR1000_AGC.cpp $(CXX_LIB_DIR)/ADAR1000_AGC.h
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+ADAR1000_Manager.o: $(CXX_LIB_DIR)/ADAR1000_Manager.cpp $(CXX_LIB_DIR)/ADAR1000_Manager.h
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# --- C++ test binary rules ---
+
+test_agc_outer_loop: test_agc_outer_loop.cpp $(CXX_OBJS) $(MOCK_OBJS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(CXX_OBJS) $(MOCK_OBJS) -o $@
+
+# Convenience target
+.PHONY: test_agc
+test_agc: test_agc_outer_loop
+	./test_agc_outer_loop
 
 # --- Individual test targets ---
 
