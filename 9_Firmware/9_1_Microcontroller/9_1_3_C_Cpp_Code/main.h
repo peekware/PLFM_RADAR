@@ -141,6 +141,15 @@ void Error_Handler(void);
 #define EN_DIS_RFPA_VDD_GPIO_Port GPIOD
 #define EN_DIS_COOLING_Pin GPIO_PIN_7
 #define EN_DIS_COOLING_GPIO_Port GPIOD
+
+/* FPGA digital I/O (directly connected GPIOs) */
+#define FPGA_DIG5_SAT_Pin       GPIO_PIN_13
+#define FPGA_DIG5_SAT_GPIO_Port GPIOD
+#define FPGA_DIG6_Pin           GPIO_PIN_14
+#define FPGA_DIG6_GPIO_Port     GPIOD
+#define FPGA_DIG7_Pin           GPIO_PIN_15
+#define FPGA_DIG7_GPIO_Port     GPIOD
+
 #define ADF4382_RX_CE_Pin GPIO_PIN_9
 #define ADF4382_RX_CE_GPIO_Port GPIOG
 #define ADF4382_RX_CS_Pin GPIO_PIN_10

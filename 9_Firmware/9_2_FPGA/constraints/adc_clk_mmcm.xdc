@@ -83,3 +83,13 @@ set_false_path -through [get_pins rx_inst/adc/mmcm_inst/mmcm_adc_400m/LOCKED]
 # Waiving hold on these 8 paths (adc_d_p[0..7] → IDDR) is standard practice
 # for source-synchronous LVDS ADC interfaces using BUFIO capture.
 set_false_path -hold -from [get_ports {adc_d_p[*]}] -to [get_clocks adc_dco_p]
+
+# --------------------------------------------------------------------------
+# Timing margin for 400 MHz critical paths
+# --------------------------------------------------------------------------
+# Extra setup uncertainty forces Vivado to leave margin for temperature/voltage/
+# aging variation. Reduced from 200 ps to 100 ps after NCO→mixer pipeline
+# register fix eliminated the dominant timing bottleneck (WNS went from +0.002ns
+# to comfortable margin). 100 ps still provides ~4% guardband on the 2.5ns period.
+# This is additive to the existing jitter-based uncertainty (~53 ps).
+set_clock_uncertainty -setup -add 0.100 [get_clocks clk_mmcm_out0]

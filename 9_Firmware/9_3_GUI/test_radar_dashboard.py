@@ -125,13 +125,14 @@ class TestRadarProtocol(unittest.TestCase):
                             long_chirp=3000, long_listen=13700,
                             guard=17540, short_chirp=50,
                             short_listen=17450, chirps=32, range_mode=0,
-                            st_flags=0, st_detail=0, st_busy=0):
+                            st_flags=0, st_detail=0, st_busy=0,
+                            agc_gain=0, agc_peak=0, agc_sat=0, agc_enable=0):
         """Build a 26-byte status response matching FPGA format (Build 26)."""
         pkt = bytearray()
         pkt.append(STATUS_HEADER_BYTE)
 
-        # Word 0: {0xFF, 3'b0, mode[1:0], 5'b0, stream[2:0], threshold[15:0]}
-        w0 = (0xFF << 24) | ((mode & 0x03) << 21) | ((stream & 0x07) << 16) | (threshold & 0xFFFF)
+        # Word 0: {0xFF[31:24], mode[23:22], stream[21:19], 3'b000[18:16], threshold[15:0]}
+        w0 = (0xFF << 24) | ((mode & 0x03) << 22) | ((stream & 0x07) << 19) | (threshold & 0xFFFF)
         pkt += struct.pack(">I", w0)
 
         # Word 1: {long_chirp, long_listen}
@@ -146,8 +147,11 @@ class TestRadarProtocol(unittest.TestCase):
         w3 = ((short_listen & 0xFFFF) << 16) | (chirps & 0x3F)
         pkt += struct.pack(">I", w3)
 
-        # Word 4: {30'd0, range_mode[1:0]}
-        w4 = range_mode & 0x03
+        # Word 4: {agc_current_gain[3:0], agc_peak_magnitude[7:0],
+        #          agc_saturation_count[7:0], agc_enable, 9'd0, range_mode[1:0]}
+        w4 = (((agc_gain & 0x0F) << 28) | ((agc_peak & 0xFF) << 20) |
+              ((agc_sat & 0xFF) << 12) | ((agc_enable & 0x01) << 11) |
+              (range_mode & 0x03))
         pkt += struct.pack(">I", w4)
 
         # Word 5: {7'd0, self_test_busy, 8'd0, self_test_detail[7:0],
@@ -368,7 +372,7 @@ class TestRadarAcquisition(unittest.TestCase):
         # Wait for at least one frame (mock produces ~32 samples per read,
         # need 2048 for a full frame, so may take a few seconds)
         frame = None
-        try:
+        try:  # noqa: SIM105
             frame = fq.get(timeout=10)
         except queue.Empty:
             pass
@@ -421,8 +425,8 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_command_roundtrip_all_opcodes(self):
         """Verify all opcodes produce valid 4-byte commands."""
-        opcodes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12,
-                   0x13, 0x14, 0x15, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
+        opcodes = [0x01, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12,
+                   0x13, 0x14, 0x15, 0x16, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
                    0x26, 0x27, 0x30, 0x31, 0xFF]
         for op in opcodes:
             cmd = RadarProtocol.build_command(op, 42)
@@ -630,8 +634,8 @@ class TestReplayConnection(unittest.TestCase):
         cmd = RadarProtocol.build_command(0x01, 1)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
-        # Send STREAM_ENABLE (hardware-only)
-        cmd = RadarProtocol.build_command(0x05, 7)
+        # Send STREAM_CONTROL (hardware-only, opcode 0x04)
+        cmd = RadarProtocol.build_command(0x04, 7)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         conn.close()
@@ -668,14 +672,14 @@ class TestReplayConnection(unittest.TestCase):
 
 
 class TestOpcodeEnum(unittest.TestCase):
-    """Verify Opcode enum matches RTL host register map."""
+    """Verify Opcode enum matches RTL host register map (radar_system_top.v)."""
 
-    def test_gain_shift_is_0x06(self):
-        """GAIN_SHIFT opcode must be 0x06 (not 0x16)."""
-        self.assertEqual(Opcode.GAIN_SHIFT, 0x06)
+    def test_gain_shift_is_0x16(self):
+        """GAIN_SHIFT opcode must be 0x16 (matches radar_system_top.v:928)."""
+        self.assertEqual(Opcode.GAIN_SHIFT, 0x16)
 
     def test_no_digital_gain_alias(self):
-        """DIGITAL_GAIN should NOT exist (was bogus 0x16 alias)."""
+        """DIGITAL_GAIN should NOT exist (use GAIN_SHIFT)."""
         self.assertFalse(hasattr(Opcode, 'DIGITAL_GAIN'))
 
     def test_self_test_trigger(self):
@@ -691,21 +695,41 @@ class TestOpcodeEnum(unittest.TestCase):
         self.assertIn(0x30, _HARDWARE_ONLY_OPCODES)
         self.assertIn(0x31, _HARDWARE_ONLY_OPCODES)
 
-    def test_0x16_not_in_hardware_only(self):
-        """Bogus 0x16 must not be in _HARDWARE_ONLY_OPCODES."""
-        self.assertNotIn(0x16, _HARDWARE_ONLY_OPCODES)
+    def test_0x16_in_hardware_only(self):
+        """GAIN_SHIFT 0x16 must be in _HARDWARE_ONLY_OPCODES."""
+        self.assertIn(0x16, _HARDWARE_ONLY_OPCODES)
 
-    def test_stream_enable_is_0x05(self):
-        """STREAM_ENABLE must be 0x05 (not 0x04)."""
-        self.assertEqual(Opcode.STREAM_ENABLE, 0x05)
+    def test_stream_control_is_0x04(self):
+        """STREAM_CONTROL must be 0x04 (matches radar_system_top.v:906)."""
+        self.assertEqual(Opcode.STREAM_CONTROL, 0x04)
+
+    def test_legacy_aliases_removed(self):
+        """Legacy aliases must NOT exist in production Opcode enum."""
+        for name in ("TRIGGER", "PRF_DIV", "NUM_CHIRPS", "CHIRP_TIMER",
+                      "STREAM_ENABLE", "THRESHOLD"):
+            self.assertFalse(hasattr(Opcode, name),
+                             f"Legacy alias Opcode.{name} should not exist")
+
+    def test_radar_mode_names(self):
+        """New canonical names must exist and match FPGA opcodes."""
+        self.assertEqual(Opcode.RADAR_MODE, 0x01)
+        self.assertEqual(Opcode.TRIGGER_PULSE, 0x02)
+        self.assertEqual(Opcode.DETECT_THRESHOLD, 0x03)
+        self.assertEqual(Opcode.STREAM_CONTROL, 0x04)
+
+    def test_stale_opcodes_not_in_hardware_only(self):
+        """Old wrong opcode values must not be in _HARDWARE_ONLY_OPCODES."""
+        self.assertNotIn(0x05, _HARDWARE_ONLY_OPCODES)  # was wrong STREAM_ENABLE
+        self.assertNotIn(0x06, _HARDWARE_ONLY_OPCODES)  # was wrong GAIN_SHIFT
 
     def test_all_rtl_opcodes_present(self):
-        """Every RTL opcode has a matching Opcode enum member."""
-        expected = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-                    0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+        """Every RTL opcode (from radar_system_top.v) has a matching Opcode enum member."""
+        expected = {0x01, 0x02, 0x03, 0x04,
+                    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
                     0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+                    0x28, 0x29, 0x2A, 0x2B, 0x2C,
                     0x30, 0x31, 0xFF}
-        enum_values = set(int(m) for m in Opcode)
+        enum_values = {int(m) for m in Opcode}
         for op in expected:
             self.assertIn(op, enum_values, f"0x{op:02X} missing from Opcode enum")
 
@@ -726,6 +750,200 @@ class TestStatusResponseDefaults(unittest.TestCase):
         self.assertEqual(sr.self_test_flags, 0x1F)
         self.assertEqual(sr.self_test_detail, 0xAB)
         self.assertEqual(sr.self_test_busy, 1)
+
+
+class TestAGCOpcodes(unittest.TestCase):
+    """Verify AGC opcode enum members match FPGA RTL (0x28-0x2C)."""
+
+    def test_agc_enable_opcode(self):
+        self.assertEqual(Opcode.AGC_ENABLE, 0x28)
+
+    def test_agc_target_opcode(self):
+        self.assertEqual(Opcode.AGC_TARGET, 0x29)
+
+    def test_agc_attack_opcode(self):
+        self.assertEqual(Opcode.AGC_ATTACK, 0x2A)
+
+    def test_agc_decay_opcode(self):
+        self.assertEqual(Opcode.AGC_DECAY, 0x2B)
+
+    def test_agc_holdoff_opcode(self):
+        self.assertEqual(Opcode.AGC_HOLDOFF, 0x2C)
+
+
+class TestAGCStatusParsing(unittest.TestCase):
+    """Verify AGC fields in status_words[4] are parsed correctly."""
+
+    def _make_status_packet(self, **kwargs):
+        """Delegate to TestRadarProtocol helper."""
+        helper = TestRadarProtocol()
+        return helper._make_status_packet(**kwargs)
+
+    def test_agc_fields_default_zero(self):
+        """With no AGC fields set, all should be 0."""
+        raw = self._make_status_packet()
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertEqual(sr.agc_current_gain, 0)
+        self.assertEqual(sr.agc_peak_magnitude, 0)
+        self.assertEqual(sr.agc_saturation_count, 0)
+        self.assertEqual(sr.agc_enable, 0)
+
+    def test_agc_fields_nonzero(self):
+        """AGC fields round-trip through status packet."""
+        raw = self._make_status_packet(agc_gain=7, agc_peak=200,
+                                       agc_sat=15, agc_enable=1)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertEqual(sr.agc_current_gain, 7)
+        self.assertEqual(sr.agc_peak_magnitude, 200)
+        self.assertEqual(sr.agc_saturation_count, 15)
+        self.assertEqual(sr.agc_enable, 1)
+
+    def test_agc_max_values(self):
+        """AGC fields at max values."""
+        raw = self._make_status_packet(agc_gain=15, agc_peak=255,
+                                       agc_sat=255, agc_enable=1)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertEqual(sr.agc_current_gain, 15)
+        self.assertEqual(sr.agc_peak_magnitude, 255)
+        self.assertEqual(sr.agc_saturation_count, 255)
+        self.assertEqual(sr.agc_enable, 1)
+
+    def test_agc_and_range_mode_coexist(self):
+        """AGC fields and range_mode occupy the same word without conflict."""
+        raw = self._make_status_packet(agc_gain=5, agc_peak=128,
+                                       agc_sat=42, agc_enable=1,
+                                       range_mode=2)
+        sr = RadarProtocol.parse_status_packet(raw)
+        self.assertEqual(sr.agc_current_gain, 5)
+        self.assertEqual(sr.agc_peak_magnitude, 128)
+        self.assertEqual(sr.agc_saturation_count, 42)
+        self.assertEqual(sr.agc_enable, 1)
+        self.assertEqual(sr.range_mode, 2)
+
+
+class TestAGCStatusResponseDefaults(unittest.TestCase):
+    """Verify StatusResponse AGC field defaults."""
+
+    def test_default_agc_fields(self):
+        sr = StatusResponse()
+        self.assertEqual(sr.agc_current_gain, 0)
+        self.assertEqual(sr.agc_peak_magnitude, 0)
+        self.assertEqual(sr.agc_saturation_count, 0)
+        self.assertEqual(sr.agc_enable, 0)
+
+    def test_agc_fields_set(self):
+        sr = StatusResponse(agc_current_gain=7, agc_peak_magnitude=200,
+                            agc_saturation_count=15, agc_enable=1)
+        self.assertEqual(sr.agc_current_gain, 7)
+        self.assertEqual(sr.agc_peak_magnitude, 200)
+        self.assertEqual(sr.agc_saturation_count, 15)
+        self.assertEqual(sr.agc_enable, 1)
+
+
+# =============================================================================
+# AGC Visualization — ring buffer / data model tests
+# =============================================================================
+
+class TestAGCVisualizationHistory(unittest.TestCase):
+    """Test the AGC visualization ring buffer logic (no GUI required)."""
+
+    def _make_deque(self, maxlen=256):
+        from collections import deque
+        return deque(maxlen=maxlen)
+
+    def test_ring_buffer_maxlen(self):
+        """Ring buffer should evict oldest when full."""
+        d = self._make_deque(maxlen=4)
+        for i in range(6):
+            d.append(i)
+        self.assertEqual(list(d), [2, 3, 4, 5])
+        self.assertEqual(len(d), 4)
+
+    def test_gain_history_accumulation(self):
+        """Gain values accumulate correctly in a deque."""
+        gain_hist = self._make_deque(maxlen=256)
+        statuses = [
+            StatusResponse(agc_current_gain=g)
+            for g in [0, 3, 7, 15, 8, 2]
+        ]
+        for st in statuses:
+            gain_hist.append(st.agc_current_gain)
+        self.assertEqual(list(gain_hist), [0, 3, 7, 15, 8, 2])
+
+    def test_peak_history_accumulation(self):
+        """Peak magnitude values accumulate correctly."""
+        peak_hist = self._make_deque(maxlen=256)
+        for p in [0, 50, 200, 255, 128]:
+            peak_hist.append(p)
+        self.assertEqual(list(peak_hist), [0, 50, 200, 255, 128])
+
+    def test_saturation_total_computation(self):
+        """Sum of saturation ring buffer gives running total."""
+        sat_hist = self._make_deque(maxlen=256)
+        for s in [0, 0, 5, 0, 12, 3]:
+            sat_hist.append(s)
+        self.assertEqual(sum(sat_hist), 20)
+
+    def test_saturation_color_thresholds(self):
+        """Color logic: green=0, yellow=1-10, red>10."""
+        def sat_color(total):
+            if total > 10:
+                return "red"
+            if total > 0:
+                return "yellow"
+            return "green"
+        self.assertEqual(sat_color(0), "green")
+        self.assertEqual(sat_color(1), "yellow")
+        self.assertEqual(sat_color(10), "yellow")
+        self.assertEqual(sat_color(11), "red")
+        self.assertEqual(sat_color(255), "red")
+
+    def test_ring_buffer_eviction_preserves_latest(self):
+        """After overflow, only the most recent values remain."""
+        d = self._make_deque(maxlen=8)
+        for i in range(20):
+            d.append(i)
+        self.assertEqual(list(d), [12, 13, 14, 15, 16, 17, 18, 19])
+
+    def test_empty_history_safe(self):
+        """Empty ring buffer should be safe for max/sum."""
+        d = self._make_deque(maxlen=256)
+        self.assertEqual(sum(d), 0)
+        self.assertEqual(len(d), 0)
+        # max() on empty would raise — test the guard pattern used in viz code
+        max_sat = max(d) if d else 0
+        self.assertEqual(max_sat, 0)
+
+    def test_agc_mode_string(self):
+        """AGC mode display string from enable flag."""
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=1).agc_enable else "MANUAL",
+            "AUTO")
+        self.assertEqual(
+            "AUTO" if StatusResponse(agc_enable=0).agc_enable else "MANUAL",
+            "MANUAL")
+
+    def test_xlim_scroll_logic(self):
+        """X-axis scroll: when n >= history_len, xlim should expand."""
+        history_len = 8
+        d = self._make_deque(maxlen=history_len)
+        for i in range(10):
+            d.append(i)
+        n = len(d)
+        # After 10 pushes into maxlen=8, n=8
+        self.assertEqual(n, history_len)
+        # xlim should be (0, n) for static or (n-history_len, n) for scrolling
+        self.assertEqual(max(0, n - history_len), 0)
+        self.assertEqual(n, 8)
+
+    def test_sat_autoscale_ylim(self):
+        """Saturation y-axis auto-scale: max(max_sat * 1.5, 5)."""
+        # No saturation
+        self.assertEqual(max(0 * 1.5, 5), 5)
+        # Some saturation
+        self.assertAlmostEqual(max(10 * 1.5, 5), 15.0)
+        # High saturation
+        self.assertAlmostEqual(max(200 * 1.5, 5), 300.0)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ module usb_data_interface (
     // Control signals
     output reg ft601_txe_n,          // Transmit enable (active low)
     output reg ft601_rxf_n,          // Receive enable (active low)
-    input wire ft601_txe,             // Transmit FIFO empty
-    input wire ft601_rxf,             // Receive FIFO full
+    input wire ft601_txe,             // TXE: Transmit FIFO Not Full (high = space available to write)
+    input wire ft601_rxf,             // RXF: Receive FIFO Not Empty (high = data available to read)
     output reg ft601_wr_n,            // Write strobe (active low)
     output reg ft601_rd_n,            // Read strobe (active low)
     output reg ft601_oe_n,            // Output enable (active low)
@@ -77,7 +77,13 @@ module usb_data_interface (
     // Self-test status readback (opcode 0x31 / included in 0xFF status packet)
     input wire [4:0]  status_self_test_flags,  // Per-test PASS(1)/FAIL(0) latched
     input wire [7:0]  status_self_test_detail, // Diagnostic detail byte latched
-    input wire        status_self_test_busy    // Self-test FSM still running
+    input wire        status_self_test_busy,   // Self-test FSM still running
+
+    // AGC status readback
+    input wire [3:0]  status_agc_current_gain,
+    input wire [7:0]  status_agc_peak_magnitude,
+    input wire [7:0]  status_agc_saturation_count,
+    input wire        status_agc_enable
 );
 
 // USB packet structure (same as before)
@@ -258,18 +264,22 @@ always @(posedge ft601_clk_in or negedge ft601_reset_n) begin
         // Gap 2: Capture status snapshot when request arrives in ft601 domain
         if (status_req_ft601) begin
             // Pack register values into 5x 32-bit status words
-            // Word 0: {0xFF, mode[1:0], stream_ctrl[2:0], cfar_threshold[15:0]}
-            status_words[0] <= {8'hFF, 3'b000, status_radar_mode,
-                                5'b00000, status_stream_ctrl,
-                                status_cfar_threshold};
+            // Word 0: {0xFF[31:24], mode[23:22], stream[21:19], 3'b000[18:16], threshold[15:0]}
+            status_words[0] <= {8'hFF, status_radar_mode, status_stream_ctrl,
+                                3'b000, status_cfar_threshold};
             // Word 1: {long_chirp_cycles[15:0], long_listen_cycles[15:0]}
             status_words[1] <= {status_long_chirp, status_long_listen};
             // Word 2: {guard_cycles[15:0], short_chirp_cycles[15:0]}
             status_words[2] <= {status_guard, status_short_chirp};
             // Word 3: {short_listen_cycles[15:0], chirps_per_elev[5:0], 10'b0}
             status_words[3] <= {status_short_listen, 10'd0, status_chirps_per_elev};
-            // Word 4: Fix 7 — range_mode in bits [1:0], rest reserved
-            status_words[4] <= {30'd0, status_range_mode};
+            // Word 4: AGC metrics + range_mode
+            status_words[4] <= {status_agc_current_gain,        // [31:28]
+                                status_agc_peak_magnitude,      // [27:20]
+                                status_agc_saturation_count,    // [19:12]
+                                status_agc_enable,              // [11]
+                                9'd0,                           // [10:2] reserved
+                                status_range_mode};             // [1:0]
             // Word 5: Self-test results {reserved[6:0], busy, reserved[7:0], detail[7:0], reserved[2:0], flags[4:0]}
             status_words[5] <= {7'd0, status_self_test_busy,
                                 8'd0, status_self_test_detail,

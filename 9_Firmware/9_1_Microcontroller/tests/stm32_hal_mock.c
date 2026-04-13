@@ -175,7 +175,7 @@ void HAL_Delay(uint32_t Delay)
     mock_tick += Delay;
 }
 
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart, uint8_t *pData,
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart, const uint8_t *pData,
                                      uint16_t Size, uint32_t Timeout)
 {
     spy_push((SpyRecord){

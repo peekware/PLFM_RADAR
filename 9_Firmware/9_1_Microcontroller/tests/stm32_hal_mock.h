@@ -34,6 +34,10 @@ typedef uint32_t HAL_StatusTypeDef;
 
 #define HAL_MAX_DELAY 0xFFFFFFFFU
 
+#ifndef __NOP
+#define __NOP() ((void)0)
+#endif
+
 /* ========================= GPIO Types ============================ */
 
 typedef struct {
@@ -182,7 +186,7 @@ GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin);
 void          HAL_GPIO_TogglePin(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin);
 uint32_t      HAL_GetTick(void);
 void          HAL_Delay(uint32_t Delay);
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart, uint8_t *pData, uint16_t Size, uint32_t Timeout);
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart, const uint8_t *pData, uint16_t Size, uint32_t Timeout);
 
 /* ========================= SPI stubs ============================== */
 

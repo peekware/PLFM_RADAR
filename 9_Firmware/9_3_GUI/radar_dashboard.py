@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AERIS-10 Radar Dashboard — Board Bring-Up Edition
+AERIS-10 Radar Dashboard
 ===================================================
 Real-time visualization and control for the AERIS-10 phased-array radar
 via FT2232H USB 2.0 interface.
@@ -10,7 +10,8 @@ Features:
   - Real-time range-Doppler magnitude heatmap (64x32)
   - CFAR detection overlay (flagged cells highlighted)
   - Range profile waterfall plot (range vs. time)
-  - Host command sender (opcodes 0x01-0x27, 0x30, 0xFF)
+  - Host command sender (opcodes per radar_system_top.v:
+    0x01-0x04, 0x10-0x16, 0x20-0x27, 0x30-0x31, 0xFF)
   - Configuration panel for all radar parameters
   - HDF5 data recording for offline analysis
   - Mock mode for development/testing without hardware
@@ -27,7 +28,7 @@ import queue
 import logging
 import argparse
 import threading
-from typing import Optional, Dict
+import contextlib
 from collections import deque
 
 import numpy as np
@@ -82,18 +83,24 @@ class RadarDashboard:
     C = 3e8                  # m/s — speed of light
 
     def __init__(self, root: tk.Tk, connection: FT2232HConnection,
-                 recorder: DataRecorder):
+                 recorder: DataRecorder, device_index: int = 0):
         self.root = root
         self.conn = connection
         self.recorder = recorder
+        self.device_index = device_index
 
-        self.root.title("AERIS-10 Radar Dashboard — Bring-Up Edition")
+        self.root.title("AERIS-10 Radar Dashboard")
         self.root.geometry("1600x950")
         self.root.configure(bg=BG)
 
         # Frame queue (acquisition → display)
         self.frame_queue: queue.Queue[RadarFrame] = queue.Queue(maxsize=8)
-        self._acq_thread: Optional[RadarAcquisition] = None
+        self._acq_thread: RadarAcquisition | None = None
+
+        # Thread-safe UI message queue — avoids calling root.after() from
+        # background threads which crashes Python 3.12 (GIL state corruption).
+        # Entries are (tag, payload) tuples drained by _schedule_update().
+        self._ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
 
         # Display state
         self._current_frame = RadarFrame()
@@ -108,6 +115,16 @@ class RadarDashboard:
         # Stable colorscale — exponential moving average of vmax
         self._vmax_ema = 1000.0
         self._vmax_alpha = 0.15  # smoothing factor (lower = more stable)
+
+        # AGC visualization history (ring buffers, ~60s at 10 Hz)
+        self._agc_history_len = 256
+        self._agc_gain_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_peak_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_sat_history: deque[int] = deque(maxlen=self._agc_history_len)
+        self._agc_time_history: deque[float] = deque(maxlen=self._agc_history_len)
+        self._agc_t0: float = time.time()
+        self._agc_last_redraw: float = 0.0  # throttle chart redraws
+        self._AGC_REDRAW_INTERVAL: float = 0.5  # seconds between redraws
 
         self._build_ui()
         self._schedule_update()
@@ -154,28 +171,30 @@ class RadarDashboard:
         self.btn_record = ttk.Button(top, text="Record", command=self._on_record)
         self.btn_record.pack(side="right", padx=4)
 
-        # Notebook (tabs)
+        # -- Tabbed notebook layout --
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
         tab_display = ttk.Frame(nb)
         tab_control = ttk.Frame(nb)
+        tab_agc = ttk.Frame(nb)
         tab_log = ttk.Frame(nb)
         nb.add(tab_display, text="  Display  ")
         nb.add(tab_control, text="  Control  ")
+        nb.add(tab_agc, text="  AGC Monitor  ")
         nb.add(tab_log, text="  Log  ")
 
         self._build_display_tab(tab_display)
         self._build_control_tab(tab_control)
+        self._build_agc_tab(tab_agc)
         self._build_log_tab(tab_log)
 
     def _build_display_tab(self, parent):
         # Compute physical axis limits
         # Range resolution: dR = c / (2 * BW) per range bin
         # But we decimate 1024→64 bins, so each bin spans 16 FFT bins.
-        # Range per FFT bin = c / (2 * BW) * (Fs / FFT_SIZE) — simplified:
-        #   max_range = c * Fs / (4 * BW) for Fs-sampled baseband
-        #   range_per_bin = max_range / NUM_RANGE_BINS
+        # Range resolution derivation: c/(2*BW) gives ~0.3 m per FFT bin.
+        # After 1024-to-64 decimation each displayed range bin spans 16 FFT bins.
         range_res = self.C / (2.0 * self.BANDWIDTH)  # ~0.3 m per FFT bin
         # After decimation 1024→64, each range bin = 16 FFT bins
         range_per_bin = range_res * 16
@@ -232,39 +251,92 @@ class RadarDashboard:
         self._canvas = canvas
 
     def _build_control_tab(self, parent):
-        """Host command sender and configuration panel."""
-        outer = ttk.Frame(parent)
-        outer.pack(fill="both", expand=True, padx=16, pady=16)
+        """Host command sender — organized by FPGA register groups.
 
-        # Left column: Quick actions
-        left = ttk.LabelFrame(outer, text="Quick Actions", padding=12)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        Layout: scrollable canvas with three columns:
+          Left:   Quick Actions + Diagnostics (self-test)
+          Center: Waveform Timing + Signal Processing
+          Right:  Detection (CFAR) + Custom Command
+        """
+        # Scrollable wrapper for small screens
+        canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        outer = ttk.Frame(canvas)
+        outer.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=outer, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        scrollbar.pack(side="right", fill="y")
 
-        ttk.Button(left, text="Trigger Chirp (0x01)",
-                   command=lambda: self._send_cmd(0x01, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Enable MTI (0x26)",
-                   command=lambda: self._send_cmd(0x26, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Disable MTI (0x26)",
-                   command=lambda: self._send_cmd(0x26, 0)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Enable CFAR (0x25)",
-                   command=lambda: self._send_cmd(0x25, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Disable CFAR (0x25)",
-                   command=lambda: self._send_cmd(0x25, 0)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Request Status (0xFF)",
-                   command=lambda: self._send_cmd(0xFF, 0)).pack(fill="x", pady=3)
+        self._param_vars: dict[str, tk.StringVar] = {}
 
-        ttk.Separator(left, orient="horizontal").pack(fill="x", pady=6)
+        # ── Left column: Quick Actions + Diagnostics ──────────────────
+        left = ttk.Frame(outer)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        ttk.Label(left, text="FPGA Self-Test", font=("Menlo", 10, "bold")).pack(
-            anchor="w", pady=(2, 0))
-        ttk.Button(left, text="Run Self-Test (0x30)",
-                   command=lambda: self._send_cmd(0x30, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Read Self-Test Result (0x31)",
-                   command=lambda: self._send_cmd(0x31, 0)).pack(fill="x", pady=3)
+        # -- Radar Operation --
+        grp_op = ttk.LabelFrame(left, text="Radar Operation", padding=10)
+        grp_op.pack(fill="x", pady=(0, 8))
 
-        # Self-test result display
-        st_frame = ttk.LabelFrame(left, text="Self-Test Results", padding=6)
-        st_frame.pack(fill="x", pady=(6, 0))
+        ttk.Button(grp_op, text="Radar Mode On",
+                   command=lambda: self._send_cmd(0x01, 1)).pack(fill="x", pady=2)
+        ttk.Button(grp_op, text="Radar Mode Off",
+                   command=lambda: self._send_cmd(0x01, 0)).pack(fill="x", pady=2)
+        ttk.Button(grp_op, text="Trigger Chirp",
+                   command=lambda: self._send_cmd(0x02, 1)).pack(fill="x", pady=2)
+
+        # Stream Control (3-bit mask)
+        sc_row = ttk.Frame(grp_op)
+        sc_row.pack(fill="x", pady=2)
+        ttk.Label(sc_row, text="Stream Control").pack(side="left")
+        var_sc = tk.StringVar(value="7")
+        self._param_vars["4"] = var_sc
+        ttk.Entry(sc_row, textvariable=var_sc, width=6).pack(side="left", padx=6)
+        ttk.Label(sc_row, text="0-7", foreground=ACCENT,
+                  font=("Menlo", 9)).pack(side="left")
+        ttk.Button(sc_row, text="Set",
+                   command=lambda: self._send_validated(
+                       0x04, var_sc, bits=3)).pack(side="right")
+
+        ttk.Button(grp_op, text="Request Status",
+                   command=lambda: self._send_cmd(0xFF, 0)).pack(fill="x", pady=2)
+
+        # -- Signal Processing --
+        grp_sp = ttk.LabelFrame(left, text="Signal Processing", padding=10)
+        grp_sp.pack(fill="x", pady=(0, 8))
+
+        sp_params = [
+            # Format: label, opcode, default, bits, hint
+            ("Detect Threshold",  0x03, "10000", 16, "0-65535"),
+            ("Gain Shift",        0x16, "0",     4,  "0-15, dir+shift"),
+            ("MTI Enable",        0x26, "0",     1,  "0=off, 1=on"),
+            ("DC Notch Width",    0x27, "0",     3,  "0-7 bins"),
+        ]
+        for label, opcode, default, bits, hint in sp_params:
+            self._add_param_row(grp_sp, label, opcode, default, bits, hint)
+
+        # MTI quick toggle
+        mti_row = ttk.Frame(grp_sp)
+        mti_row.pack(fill="x", pady=2)
+        ttk.Button(mti_row, text="Enable MTI",
+                   command=lambda: self._send_cmd(0x26, 1)).pack(
+                       side="left", expand=True, fill="x", padx=(0, 2))
+        ttk.Button(mti_row, text="Disable MTI",
+                   command=lambda: self._send_cmd(0x26, 0)).pack(
+                       side="left", expand=True, fill="x", padx=(2, 0))
+
+        # -- Diagnostics --
+        grp_diag = ttk.LabelFrame(left, text="Diagnostics", padding=10)
+        grp_diag.pack(fill="x", pady=(0, 8))
+
+        ttk.Button(grp_diag, text="Run Self-Test",
+                   command=lambda: self._send_cmd(0x30, 1)).pack(fill="x", pady=2)
+        ttk.Button(grp_diag, text="Read Self-Test Result",
+                   command=lambda: self._send_cmd(0x31, 0)).pack(fill="x", pady=2)
+
+        st_frame = ttk.LabelFrame(grp_diag, text="Self-Test Results", padding=6)
+        st_frame.pack(fill="x", pady=(4, 0))
         self._st_labels = {}
         for name, default_text in [
             ("busy", "Busy: --"),
@@ -280,66 +352,238 @@ class RadarDashboard:
             lbl.pack(anchor="w")
             self._st_labels[name] = lbl
 
-        # Right column: Parameter configuration
-        right = ttk.LabelFrame(outer, text="Parameter Configuration", padding=12)
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        # ── Center column: Waveform Timing ────────────────────────────
+        center = ttk.Frame(outer)
+        center.grid(row=0, column=1, sticky="nsew", padx=6)
 
-        self._param_vars: Dict[str, tk.StringVar] = {}
-        params = [
-            ("CFAR Guard (0x21)", 0x21, "2"),
-            ("CFAR Train (0x22)", 0x22, "8"),
-            ("CFAR Alpha Q4.4 (0x23)", 0x23, "48"),
-            ("CFAR Mode (0x24)", 0x24, "0"),
-            ("Threshold (0x10)", 0x10, "500"),
-            ("Gain Shift (0x06)", 0x06, "0"),
-            ("DC Notch Width (0x27)", 0x27, "0"),
-            ("Range Mode (0x20)", 0x20, "0"),
-            ("Stream Enable (0x05)", 0x05, "7"),
+        grp_wf = ttk.LabelFrame(center, text="Waveform Timing", padding=10)
+        grp_wf.pack(fill="x", pady=(0, 8))
+
+        wf_params = [
+            ("Long Chirp Cycles",   0x10, "3000",  16, "0-65535, rst=3000"),
+            ("Long Listen Cycles",  0x11, "13700", 16, "0-65535, rst=13700"),
+            ("Guard Cycles",        0x12, "17540", 16, "0-65535, rst=17540"),
+            ("Short Chirp Cycles",  0x13, "50",    16, "0-65535, rst=50"),
+            ("Short Listen Cycles", 0x14, "17450", 16, "0-65535, rst=17450"),
+            ("Chirps Per Elevation", 0x15, "32",    6, "1-32, clamped"),
         ]
+        for label, opcode, default, bits, hint in wf_params:
+            self._add_param_row(grp_wf, label, opcode, default, bits, hint)
 
-        for row_idx, (label, opcode, default) in enumerate(params):
-            ttk.Label(right, text=label).grid(row=row_idx, column=0,
-                                               sticky="w", pady=2)
-            var = tk.StringVar(value=default)
-            self._param_vars[str(opcode)] = var
-            ent = ttk.Entry(right, textvariable=var, width=10)
-            ent.grid(row=row_idx, column=1, padx=8, pady=2)
-            ttk.Button(
-                right, text="Set",
-                command=lambda op=opcode, v=var: self._send_cmd(op, int(v.get()))
-            ).grid(row=row_idx, column=2, pady=2)
+        # ── Right column: Detection (CFAR) + Custom ───────────────────
+        right = ttk.Frame(outer)
+        right.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
 
-        # Custom command
-        ttk.Separator(right, orient="horizontal").grid(
-            row=len(params), column=0, columnspan=3, sticky="ew", pady=8)
+        grp_cfar = ttk.LabelFrame(right, text="Detection (CFAR)", padding=10)
+        grp_cfar.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(right, text="Custom Opcode (hex)").grid(
-            row=len(params) + 1, column=0, sticky="w")
+        cfar_params = [
+            ("CFAR Enable",       0x25, "0",  1,  "0=off, 1=on"),
+            ("CFAR Guard Cells",  0x21, "2",  4,  "0-15, rst=2"),
+            ("CFAR Train Cells",  0x22, "8",  5,  "1-31, rst=8"),
+            ("CFAR Alpha (Q4.4)", 0x23, "48", 8,  "0-255, rst=0x30=3.0"),
+            ("CFAR Mode",         0x24, "0",  2,  "0=CA 1=GO 2=SO"),
+        ]
+        for label, opcode, default, bits, hint in cfar_params:
+            self._add_param_row(grp_cfar, label, opcode, default, bits, hint)
+
+        # CFAR quick toggle
+        cfar_row = ttk.Frame(grp_cfar)
+        cfar_row.pack(fill="x", pady=2)
+        ttk.Button(cfar_row, text="Enable CFAR",
+                   command=lambda: self._send_cmd(0x25, 1)).pack(
+                       side="left", expand=True, fill="x", padx=(0, 2))
+        ttk.Button(cfar_row, text="Disable CFAR",
+                   command=lambda: self._send_cmd(0x25, 0)).pack(
+                       side="left", expand=True, fill="x", padx=(2, 0))
+
+        # ── AGC (Automatic Gain Control) ──────────────────────────────
+        grp_agc = ttk.LabelFrame(right, text="AGC (Auto Gain)", padding=10)
+        grp_agc.pack(fill="x", pady=(0, 8))
+
+        agc_params = [
+            ("AGC Enable",   0x28, "0",   1, "0=manual, 1=auto"),
+            ("AGC Target",   0x29, "200", 8, "0-255, peak target"),
+            ("AGC Attack",   0x2A, "1",   4, "0-15, atten step"),
+            ("AGC Decay",    0x2B, "1",   4, "0-15, gain-up step"),
+            ("AGC Holdoff",  0x2C, "4",   4, "0-15, frames"),
+        ]
+        for label, opcode, default, bits, hint in agc_params:
+            self._add_param_row(grp_agc, label, opcode, default, bits, hint)
+
+        # AGC quick toggle
+        agc_row = ttk.Frame(grp_agc)
+        agc_row.pack(fill="x", pady=2)
+        ttk.Button(agc_row, text="Enable AGC",
+                   command=lambda: self._send_cmd(0x28, 1)).pack(
+                       side="left", expand=True, fill="x", padx=(0, 2))
+        ttk.Button(agc_row, text="Disable AGC",
+                   command=lambda: self._send_cmd(0x28, 0)).pack(
+                       side="left", expand=True, fill="x", padx=(2, 0))
+
+        # AGC status readback labels
+        agc_st = ttk.LabelFrame(grp_agc, text="AGC Status", padding=6)
+        agc_st.pack(fill="x", pady=(4, 0))
+        self._agc_labels = {}
+        for name, default_text in [
+            ("enable", "AGC: --"),
+            ("gain",   "Gain: --"),
+            ("peak",   "Peak: --"),
+            ("sat",    "Sat Count: --"),
+        ]:
+            lbl = ttk.Label(agc_st, text=default_text, font=("Menlo", 9))
+            lbl.pack(anchor="w")
+            self._agc_labels[name] = lbl
+
+        # ── Custom Command (advanced / debug) ─────────────────────────
+        grp_cust = ttk.LabelFrame(right, text="Custom Command", padding=10)
+        grp_cust.pack(fill="x", pady=(0, 8))
+
+        r0 = ttk.Frame(grp_cust)
+        r0.pack(fill="x", pady=2)
+        ttk.Label(r0, text="Opcode (hex)").pack(side="left")
         self._custom_op = tk.StringVar(value="01")
-        ttk.Entry(right, textvariable=self._custom_op, width=10).grid(
-            row=len(params) + 1, column=1, padx=8)
+        ttk.Entry(r0, textvariable=self._custom_op, width=8).pack(
+            side="left", padx=6)
 
-        ttk.Label(right, text="Value (dec)").grid(
-            row=len(params) + 2, column=0, sticky="w")
+        r1 = ttk.Frame(grp_cust)
+        r1.pack(fill="x", pady=2)
+        ttk.Label(r1, text="Value (dec)").pack(side="left")
         self._custom_val = tk.StringVar(value="0")
-        ttk.Entry(right, textvariable=self._custom_val, width=10).grid(
-            row=len(params) + 2, column=1, padx=8)
+        ttk.Entry(r1, textvariable=self._custom_val, width=8).pack(
+            side="left", padx=6)
 
-        ttk.Button(right, text="Send Custom",
-                   command=self._send_custom).grid(
-            row=len(params) + 2, column=2, pady=2)
+        ttk.Button(grp_cust, text="Send",
+                   command=self._send_custom).pack(fill="x", pady=2)
 
+        # Column weights
         outer.columnconfigure(0, weight=1)
-        outer.columnconfigure(1, weight=2)
+        outer.columnconfigure(1, weight=1)
+        outer.columnconfigure(2, weight=1)
         outer.rowconfigure(0, weight=1)
+
+    def _add_param_row(self, parent, label: str, opcode: int,
+                       default: str, bits: int, hint: str):
+        """Add a single parameter row: label, entry, hint, Set button with validation."""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=label).pack(side="left")
+        var = tk.StringVar(value=default)
+        self._param_vars[str(opcode)] = var
+        ttk.Entry(row, textvariable=var, width=8).pack(side="left", padx=6)
+        ttk.Label(row, text=hint, foreground=ACCENT,
+                  font=("Menlo", 9)).pack(side="left")
+        ttk.Button(row, text="Set",
+                   command=lambda: self._send_validated(
+                       opcode, var, bits=bits)).pack(side="right")
+
+    def _send_validated(self, opcode: int, var: tk.StringVar, bits: int):
+        """Parse, clamp to bit-width, send command, and update the entry."""
+        try:
+            raw = int(var.get())
+        except ValueError:
+            log.error(f"Invalid value for opcode 0x{opcode:02X}: {var.get()!r}")
+            return
+        max_val = (1 << bits) - 1
+        clamped = max(0, min(raw, max_val))
+        if clamped != raw:
+            log.warning(f"Value {raw} clamped to {clamped} "
+                        f"({bits}-bit max={max_val}) for opcode 0x{opcode:02X}")
+            var.set(str(clamped))
+        self._send_cmd(opcode, clamped)
+
+    def _build_agc_tab(self, parent):
+        """AGC Monitor tab — real-time strip charts for gain, peak, and saturation."""
+        # Top row: AGC status badge + saturation indicator
+        top = ttk.Frame(parent)
+        top.pack(fill="x", padx=8, pady=(8, 0))
+
+        self._agc_badge = ttk.Label(
+            top, text="AGC: --", font=("Menlo", 14, "bold"), foreground=FG)
+        self._agc_badge.pack(side="left", padx=(0, 24))
+
+        self._agc_sat_badge = ttk.Label(
+            top, text="Saturation: 0", font=("Menlo", 12), foreground=GREEN)
+        self._agc_sat_badge.pack(side="left", padx=(0, 24))
+
+        self._agc_gain_value = ttk.Label(
+            top, text="Gain: --", font=("Menlo", 12), foreground=ACCENT)
+        self._agc_gain_value.pack(side="left", padx=(0, 24))
+
+        self._agc_peak_value = ttk.Label(
+            top, text="Peak: --", font=("Menlo", 12), foreground=ACCENT)
+        self._agc_peak_value.pack(side="left")
+
+        # Matplotlib figure with 3 stacked subplots sharing x-axis (time)
+        self._agc_fig = Figure(figsize=(14, 7), facecolor=BG)
+        self._agc_fig.subplots_adjust(
+            left=0.07, right=0.98, top=0.95, bottom=0.08,
+            hspace=0.30)
+
+        # Subplot 1: FPGA inner-loop gain (4-bit, 0-15)
+        self._ax_gain = self._agc_fig.add_subplot(3, 1, 1)
+        self._ax_gain.set_facecolor(BG2)
+        self._ax_gain.set_title("FPGA AGC Gain (inner loop)", color=FG, fontsize=10)
+        self._ax_gain.set_ylabel("Gain Level", color=FG)
+        self._ax_gain.set_ylim(-0.5, 15.5)
+        self._ax_gain.tick_params(colors=FG)
+        self._ax_gain.set_xlim(0, self._agc_history_len)
+        self._gain_line, = self._ax_gain.plot(
+            [], [], color=ACCENT, linewidth=1.5, label="Gain")
+        self._ax_gain.axhline(y=0, color=RED, linewidth=0.5, alpha=0.5, linestyle="--")
+        self._ax_gain.axhline(y=15, color=RED, linewidth=0.5, alpha=0.5, linestyle="--")
+        for spine in self._ax_gain.spines.values():
+            spine.set_color(SURFACE)
+
+        # Subplot 2: Peak magnitude (8-bit, 0-255)
+        self._ax_peak = self._agc_fig.add_subplot(3, 1, 2)
+        self._ax_peak.set_facecolor(BG2)
+        self._ax_peak.set_title("Peak Magnitude", color=FG, fontsize=10)
+        self._ax_peak.set_ylabel("Peak (8-bit)", color=FG)
+        self._ax_peak.set_ylim(-5, 260)
+        self._ax_peak.tick_params(colors=FG)
+        self._ax_peak.set_xlim(0, self._agc_history_len)
+        self._peak_line, = self._ax_peak.plot(
+            [], [], color=YELLOW, linewidth=1.5, label="Peak")
+        # AGC target reference line (default 200)
+        self._agc_target_line = self._ax_peak.axhline(
+            y=200, color=GREEN, linewidth=1.0, alpha=0.7, linestyle="--",
+            label="Target (200)")
+        self._ax_peak.legend(loc="upper right", fontsize=8,
+                             facecolor=BG2, edgecolor=SURFACE,
+                             labelcolor=FG)
+        for spine in self._ax_peak.spines.values():
+            spine.set_color(SURFACE)
+
+        # Subplot 3: Saturation count (8-bit, 0-255) as bar-style fill
+        self._ax_sat = self._agc_fig.add_subplot(3, 1, 3)
+        self._ax_sat.set_facecolor(BG2)
+        self._ax_sat.set_title("Saturation Count", color=FG, fontsize=10)
+        self._ax_sat.set_ylabel("Sat Count", color=FG)
+        self._ax_sat.set_xlabel("Sample Index", color=FG)
+        self._ax_sat.set_ylim(-1, 40)
+        self._ax_sat.tick_params(colors=FG)
+        self._ax_sat.set_xlim(0, self._agc_history_len)
+        self._sat_fill = self._ax_sat.fill_between(
+            [], [], color=RED, alpha=0.6, label="Saturation")
+        self._sat_line, = self._ax_sat.plot(
+            [], [], color=RED, linewidth=1.0)
+        self._ax_sat.axhline(y=0, color=GREEN, linewidth=0.5, alpha=0.5, linestyle="--")
+        for spine in self._ax_sat.spines.values():
+            spine.set_color(SURFACE)
+
+        agc_canvas = FigureCanvasTkAgg(self._agc_fig, master=parent)
+        agc_canvas.draw()
+        agc_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._agc_canvas = agc_canvas
 
     def _build_log_tab(self, parent):
         self.log_text = tk.Text(parent, bg=BG2, fg=FG, font=("Menlo", 10),
                                  insertbackground=FG, wrap="word")
         self.log_text.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # Redirect log handler to text widget
-        handler = _TextHandler(self.log_text)
+        # Redirect log handler to text widget (via UI queue for thread safety)
+        handler = _TextHandler(self._ui_queue)
         handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
                                                 datefmt="%H:%M:%S"))
         logging.getLogger().addHandler(handler)
@@ -364,9 +608,9 @@ class RadarDashboard:
         self.root.update_idletasks()
 
         def _do_connect():
-            ok = self.conn.open()
-            # Schedule UI update back on the main thread
-            self.root.after(0, lambda: self._on_connect_done(ok))
+            ok = self.conn.open(self.device_index)
+            # Post result to UI queue (drained by _schedule_update)
+            self._ui_queue.put(("connect", ok))
 
         threading.Thread(target=_do_connect, daemon=True).start()
 
@@ -414,11 +658,11 @@ class RadarDashboard:
             log.error("Invalid custom command values")
 
     def _on_status_received(self, status: StatusResponse):
-        """Called from acquisition thread — schedule UI update on main thread."""
-        self.root.after(0, self._update_self_test_labels, status)
+        """Called from acquisition thread — post to UI queue for main thread."""
+        self._ui_queue.put(("status", status))
 
     def _update_self_test_labels(self, status: StatusResponse):
-        """Update the self-test result labels from a StatusResponse."""
+        """Update the self-test result labels and AGC status from a StatusResponse."""
         if not hasattr(self, '_st_labels'):
             return
         flags = status.self_test_flags
@@ -453,10 +697,123 @@ class RadarDashboard:
             self._st_labels[key].config(
                 text=f"{name}: {result_str}", foreground=color)
 
+        # AGC status readback
+        if hasattr(self, '_agc_labels'):
+            agc_str = "AUTO" if status.agc_enable else "MANUAL"
+            agc_color = GREEN if status.agc_enable else FG
+            self._agc_labels["enable"].config(
+                text=f"AGC: {agc_str}", foreground=agc_color)
+            self._agc_labels["gain"].config(
+                text=f"Gain: {status.agc_current_gain}")
+            self._agc_labels["peak"].config(
+                text=f"Peak: {status.agc_peak_magnitude}")
+            sat_color = RED if status.agc_saturation_count > 0 else FG
+            self._agc_labels["sat"].config(
+                text=f"Sat Count: {status.agc_saturation_count}",
+                foreground=sat_color)
+
+        # AGC visualization update
+        self._update_agc_visualization(status)
+
+    def _update_agc_visualization(self, status: StatusResponse):
+        """Push AGC metrics into ring buffers and redraw strip charts.
+
+        Data is always accumulated (cheap), but matplotlib redraws are
+        throttled to ``_AGC_REDRAW_INTERVAL`` seconds to avoid saturating
+        the GUI event-loop when status packets arrive at 20 Hz.
+        """
+        if not hasattr(self, '_agc_canvas'):
+            return
+
+        # Append to ring buffers (always — this is O(1))
+        self._agc_gain_history.append(status.agc_current_gain)
+        self._agc_peak_history.append(status.agc_peak_magnitude)
+        self._agc_sat_history.append(status.agc_saturation_count)
+
+        # Update indicator labels (cheap Tk config calls)
+        mode_str = "AUTO" if status.agc_enable else "MANUAL"
+        mode_color = GREEN if status.agc_enable else FG
+        self._agc_badge.config(text=f"AGC: {mode_str}", foreground=mode_color)
+        self._agc_gain_value.config(
+            text=f"Gain: {status.agc_current_gain}")
+        self._agc_peak_value.config(
+            text=f"Peak: {status.agc_peak_magnitude}")
+
+        total_sat = sum(self._agc_sat_history)
+        if total_sat > 10:
+            sat_color = RED
+        elif total_sat > 0:
+            sat_color = YELLOW
+        else:
+            sat_color = GREEN
+        self._agc_sat_badge.config(
+            text=f"Saturation: {total_sat}", foreground=sat_color)
+
+        # ---- Throttle matplotlib redraws ---------------------------------
+        now = time.monotonic()
+        if now - self._agc_last_redraw < self._AGC_REDRAW_INTERVAL:
+            return
+        self._agc_last_redraw = now
+
+        n = len(self._agc_gain_history)
+        xs = list(range(n))
+
+        # Update line plots
+        gain_data = list(self._agc_gain_history)
+        peak_data = list(self._agc_peak_history)
+        sat_data = list(self._agc_sat_history)
+
+        self._gain_line.set_data(xs, gain_data)
+        self._peak_line.set_data(xs, peak_data)
+
+        # Saturation: redraw as filled area
+        self._sat_line.set_data(xs, sat_data)
+        if self._sat_fill is not None:
+            self._sat_fill.remove()
+        self._sat_fill = self._ax_sat.fill_between(
+            xs, sat_data, color=RED, alpha=0.4)
+
+        # Auto-scale saturation Y axis to data
+        max_sat = max(sat_data) if sat_data else 0
+        self._ax_sat.set_ylim(-1, max(max_sat * 1.5, 5))
+
+        # Scroll X axis to keep latest data visible
+        if n >= self._agc_history_len:
+            self._ax_gain.set_xlim(0, n)
+            self._ax_peak.set_xlim(0, n)
+            self._ax_sat.set_xlim(0, n)
+
+        self._agc_canvas.draw_idle()
+
     # --------------------------------------------------------- Display loop
     def _schedule_update(self):
+        self._drain_ui_queue()
         self._update_display()
         self.root.after(self.UPDATE_INTERVAL_MS, self._schedule_update)
+
+    def _drain_ui_queue(self):
+        """Process all pending cross-thread messages on the main thread."""
+        while True:
+            try:
+                tag, payload = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            if tag == "connect":
+                self._on_connect_done(payload)
+            elif tag == "status":
+                self._update_self_test_labels(payload)
+            elif tag == "log":
+                self._log_handler_append(payload)
+
+    def _log_handler_append(self, msg: str):
+        """Append a log message to the log Text widget (main thread only)."""
+        with contextlib.suppress(Exception):
+            self.log_text.insert("end", msg + "\n")
+            self.log_text.see("end")
+            # Keep last 500 lines
+            lines = int(self.log_text.index("end-1c").split(".")[0])
+            if lines > 500:
+                self.log_text.delete("1.0", f"{lines - 500}.0")
 
     def _update_display(self):
         """Pull latest frame from queue and update plots."""
@@ -522,26 +879,21 @@ class RadarDashboard:
 
 
 class _TextHandler(logging.Handler):
-    """Logging handler that writes to a tkinter Text widget."""
+    """Logging handler that posts messages to a queue for main-thread append.
 
-    def __init__(self, text_widget: tk.Text):
+    Using widget.after() from background threads crashes Python 3.12 due to
+    GIL state corruption.  Instead we post to the dashboard's _ui_queue and
+    let _drain_ui_queue() append on the main thread.
+    """
+
+    def __init__(self, ui_queue: queue.Queue[tuple[str, object]]):
         super().__init__()
-        self._text = text_widget
+        self._ui_queue = ui_queue
 
     def emit(self, record):
         msg = self.format(record)
-        try:
-            self._text.after(0, self._append, msg)
-        except Exception:
-            pass
-
-    def _append(self, msg: str):
-        self._text.insert("end", msg + "\n")
-        self._text.see("end")
-        # Keep last 500 lines
-        lines = int(self._text.index("end-1c").split(".")[0])
-        if lines > 500:
-            self._text.delete("1.0", f"{lines - 500}.0")
+        with contextlib.suppress(Exception):
+            self._ui_queue.put(("log", msg))
 
 
 # ============================================================================
@@ -578,7 +930,7 @@ def main():
 
     root = tk.Tk()
 
-    dashboard = RadarDashboard(root, conn, recorder)
+    dashboard = RadarDashboard(root, conn, recorder, device_index=args.device)
 
     if args.record:
         filepath = os.path.join(
