@@ -462,6 +462,11 @@ _HARDWARE_ONLY_OPCODES = {
     0x15,  # CHIRPS_PER_ELEV
     0x16,  # GAIN_SHIFT
     0x20,  # RANGE_MODE
+    0x28,  # AGC_ENABLE
+    0x29,  # AGC_TARGET
+    0x2A,  # AGC_ATTACK
+    0x2B,  # AGC_DECAY
+    0x2C,  # AGC_HOLDOFF
     0x30,  # SELF_TEST_TRIGGER
     0x31,  # SELF_TEST_STATUS
     0xFF,  # STATUS_REQUEST
@@ -469,6 +474,7 @@ _HARDWARE_ONLY_OPCODES = {
 
 # Replay-adjustable opcodes (re-run signal processing)
 _REPLAY_ADJUSTABLE_OPCODES = {
+    0x03,  # DETECT_THRESHOLD
     0x21,  # CFAR_GUARD
     0x22,  # CFAR_TRAIN
     0x23,  # CFAR_ALPHA
@@ -612,6 +618,7 @@ class ReplayConnection:
         self._cfar_alpha: int = 0x30
         self._cfar_mode: int = 0  # 0=CA, 1=GO, 2=SO
         self._cfar_enable: bool = True
+        self._detect_threshold: int = 10000  # RTL default (host_detect_threshold)
         # Raw source arrays (loaded once, reprocessed on param change)
         self._dop_mti_i: np.ndarray | None = None
         self._dop_mti_q: np.ndarray | None = None
@@ -633,7 +640,7 @@ class ReplayConnection:
                      f"(MTI={'ON' if self._mti_enable else 'OFF'}, "
                      f"{self._frame_len} bytes/frame)")
             return True
-        except (OSError, ValueError, struct.error) as e:
+        except (OSError, ValueError, IndexError, struct.error) as e:
             log.error(f"Replay open failed: {e}")
             return False
 
@@ -676,7 +683,11 @@ class ReplayConnection:
         if opcode in _REPLAY_ADJUSTABLE_OPCODES:
             changed = False
             with self._lock:
-                if opcode == 0x21:  # CFAR_GUARD
+                if opcode == 0x03:  # DETECT_THRESHOLD
+                    if self._detect_threshold != value:
+                        self._detect_threshold = value
+                        changed = True
+                elif opcode == 0x21:  # CFAR_GUARD
                     if self._cfar_guard != value:
                         self._cfar_guard = value
                         changed = True
@@ -768,7 +779,10 @@ class ReplayConnection:
                 mode=self._cfar_mode,
             )
         else:
-            det = np.zeros((NUM_RANGE_BINS, NUM_DOPPLER_BINS), dtype=bool)
+            # Simple threshold fallback matching RTL cfar_ca.v:
+            # detect = (|I| + |Q|) > detect_threshold  (L1 norm)
+            mag = np.abs(dop_i) + np.abs(dop_q)
+            det = mag > self._detect_threshold
 
         det_count = int(det.sum())
         log.info(f"Replay: rebuilt {NUM_CELLS} packets ("

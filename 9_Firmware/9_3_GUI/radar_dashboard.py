@@ -734,10 +734,10 @@ class RadarDashboard:
         mode_str = "AUTO" if status.agc_enable else "MANUAL"
         mode_color = GREEN if status.agc_enable else FG
         self._agc_badge.config(text=f"AGC: {mode_str}", foreground=mode_color)
-        self._agc_current_gain_lbl.config(
-            text=f"Current Gain: {status.agc_current_gain}")
-        self._agc_current_peak_lbl.config(
-            text=f"Peak Mag: {status.agc_peak_magnitude}")
+        self._agc_gain_value.config(
+            text=f"Gain: {status.agc_current_gain}")
+        self._agc_peak_value.config(
+            text=f"Peak: {status.agc_peak_magnitude}")
 
         total_sat = sum(self._agc_sat_history)
         if total_sat > 10:
@@ -746,8 +746,8 @@ class RadarDashboard:
             sat_color = YELLOW
         else:
             sat_color = GREEN
-        self._agc_sat_total_lbl.config(
-            text=f"Total Saturations: {total_sat}", foreground=sat_color)
+        self._agc_sat_badge.config(
+            text=f"Saturation: {total_sat}", foreground=sat_color)
 
         # ---- Throttle matplotlib redraws ---------------------------------
         now = time.monotonic()

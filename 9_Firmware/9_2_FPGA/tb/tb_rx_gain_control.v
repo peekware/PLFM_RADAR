@@ -546,6 +546,315 @@ initial begin
           "T16.3: Gain increased after holdoff expired (gain 0->1)");
 
     // ---------------------------------------------------------------
+    // TEST 17: Repeated attacks drive gain negative, clamp at -7,
+    //          then decay recovers
+    // ---------------------------------------------------------------
+    $display("");
+    $display("--- Test 17: Repeated attack → negative clamp → decay recovery ---");
+
+    // ----- 17a: Walk gain from +7 down through zero via repeated attack -----
+    reset_n = 0;
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+    repeat (2) @(posedge clk);
+
+    gain_shift  = 4'b0_111;  // amplify x128, internal gain = +7
+    agc_enable  = 0;
+    agc_attack  = 4'd2;
+    agc_decay   = 4'd1;
+    agc_holdoff = 4'd2;
+    agc_target  = 8'd100;
+    @(posedge clk);
+    agc_enable = 1;
+    @(posedge clk); @(posedge clk); @(posedge clk); #1;
+    check(current_gain == 4'b0_111,
+          "T17a.1: AGC initialized at gain +7 (0x7)");
+
+    // Frame 1: saturating at gain +7 → gain 7-2=5
+    send_sample(16'sd1000, 16'sd1000);  // 1000<<7 = 128000 → overflow
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b0_101,
+          "T17a.2: After attack: gain +5 (0x5)");
+
+    // Frame 2: still saturating at gain +5 → gain 5-2=3
+    send_sample(16'sd1000, 16'sd1000);  // 1000<<5 = 32000 → no overflow
+    send_sample(16'sd2000, 16'sd2000);  // 2000<<5 = 64000 → overflow
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b0_011,
+          "T17a.3: After attack: gain +3 (0x3)");
+
+    // Frame 3: saturating at gain +3 → gain 3-2=1
+    send_sample(16'sd5000, 16'sd5000);  // 5000<<3 = 40000 → overflow
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b0_001,
+          "T17a.4: After attack: gain +1 (0x1)");
+
+    // Frame 4: saturating at gain +1 → gain 1-2=-1 → encoding 0x9
+    send_sample(16'sd20000, 16'sd20000); // 20000<<1 = 40000 → overflow
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_001,
+          "T17a.5: Attack crossed zero: gain -1 (0x9)");
+
+    // Frame 5: at gain -1 (right shift 1), 20000>>>1=10000, NO overflow.
+    // peak = 20000 → [14:7]=156 > target(100) → HOLD, gain stays -1
+    send_sample(16'sd20000, 16'sd20000);
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_001,
+          "T17a.6: No overflow at -1, peak>target → HOLD, gain stays -1");
+
+    // ----- 17b: Max attack step clamps at -7 -----
+    $display("");
+    $display("--- Test 17b: Max attack clamps at -7 ---");
+
+    reset_n = 0;
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+    repeat (2) @(posedge clk);
+
+    gain_shift  = 4'b0_011;  // amplify x8, internal gain = +3
+    agc_attack  = 4'd15;     // max attack step
+    agc_enable  = 0;
+    @(posedge clk);
+    agc_enable = 1;
+    @(posedge clk); @(posedge clk); @(posedge clk); #1;
+    check(current_gain == 4'b0_011,
+          "T17b.1: Initialized at gain +3");
+
+    // One saturating frame: gain = clamp(3 - 15) = clamp(-12) = -7 → 0xF
+    send_sample(16'sd5000, 16'sd5000);  // 5000<<3 = 40000 → overflow
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_111,
+          "T17b.2: Gain clamped at -7 (0xF) after max attack");
+
+    // Another frame at gain -7: 5000>>>7 = 39, peak = 5000→[14:7]=39 < target(100)
+    // → decay path, but holdoff counter was reset to 2 by the attack above
+    send_sample(16'sd5000, 16'sd5000);
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_111,
+          "T17b.3: Gain still -7 (holdoff active, 2→1)");
+
+    // ----- 17c: Decay recovery from -7 after holdoff -----
+    $display("");
+    $display("--- Test 17c: Decay recovery from deep negative ---");
+
+    // Holdoff was 2. After attack (frame above), holdoff=2.
+    // Frame after 17b.3: holdoff decrements to 0
+    send_sample(16'sd5000, 16'sd5000);
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_111,
+          "T17c.1: Gain still -7 (holdoff 1→0)");
+
+    // Now holdoff=0, next weak frame should trigger decay: -7 + 1 = -6 → 0xE
+    send_sample(16'sd5000, 16'sd5000);
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_110,
+          "T17c.2: Decay from -7 to -6 (0xE) after holdoff expired");
+
+    // One more decay: -6 + 1 = -5 → 0xD
+    send_sample(16'sd5000, 16'sd5000);
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+    check(current_gain == 4'b1_101,
+          "T17c.3: Decay from -6 to -5 (0xD)");
+
+    // Verify output is actually attenuated: at gain -5 (right shift 5),
+    // 5000 >>> 5 = 156
+    send_sample(16'sd5000, 16'sd0);
+    check(data_i_out == 16'sd156,
+          "T17c.4: Output correctly attenuated: 5000>>>5 = 156");
+
+    // =================================================================
+    // Test 18: valid_in + frame_boundary on the SAME cycle
+    // Verify the coincident sample is included in the frame snapshot
+    // (Bug #7 fix — previously lost due to NBA last-write-wins)
+    // =================================================================
+    $display("");
+    $display("--- Test 18: valid_in + frame_boundary simultaneous ---");
+
+    // ----- 18a: Coincident saturating sample included in sat count -----
+    reset_n = 0;
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+    repeat (2) @(posedge clk);
+
+    gain_shift  = 4'b0_011;  // amplify x8 (shift left 3)
+    agc_attack  = 4'd1;
+    agc_decay   = 4'd1;
+    agc_holdoff = 4'd2;
+    agc_target  = 8'd100;
+    agc_enable  = 1;
+    @(posedge clk); @(posedge clk); @(posedge clk); #1;
+
+    // Send one normal sample first (establishes a non-zero frame)
+    send_sample(16'sd100, 16'sd100);  // small, no overflow at gain +3
+
+    // Now: assert valid_in AND frame_boundary on the SAME posedge.
+    // The sample is large enough to overflow at gain +3: 5000<<3 = 40000 > 32767
+    @(negedge clk);
+    data_i_in      = 16'sd5000;
+    data_q_in      = 16'sd5000;
+    valid_in       = 1'b1;
+    frame_boundary = 1'b1;
+    @(posedge clk); #1;  // DUT samples both signals
+    @(negedge clk);
+    valid_in       = 1'b0;
+    frame_boundary = 1'b0;
+    @(posedge clk); #1;  // let NBA settle
+    @(posedge clk); #1;
+
+    // Saturation count should be 1 (the coincident sample overflowed)
+    check(saturation_count == 8'd1,
+          "T18a.1: Coincident saturating sample counted in snapshot (sat_count=1)");
+
+    // Peak should reflect pre-gain max(|5000|,|5000|) = 5000 → [14:7] = 39
+    // (or at least >= the first sample's peak of 100→[14:7]=0)
+    check(peak_magnitude == 8'd39,
+          "T18a.2: Coincident sample peak included in snapshot (peak=39)");
+
+    // AGC should have attacked (sat > 0): gain +3 → +3-1 = +2
+    check(current_gain == 4'b0_010,
+          "T18a.3: AGC attacked on coincident saturation (gain +3 → +2)");
+
+    // ----- 18b: Coincident non-saturating peak updates snapshot -----
+    $display("");
+    $display("--- Test 18b: Coincident peak-only sample ---");
+
+    reset_n = 0;
+    agc_enable  = 0;  // deassert so transition fires with NEW gain_shift
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+    repeat (2) @(posedge clk);
+
+    gain_shift  = 4'b0_000;  // no amplification (shift 0)
+    agc_attack  = 4'd1;
+    agc_decay   = 4'd1;
+    agc_holdoff = 4'd0;
+    agc_target  = 8'd200;    // high target so signal is "weak"
+    agc_enable  = 1;
+    @(posedge clk); @(posedge clk); @(posedge clk); #1;
+
+    // Send a small sample
+    send_sample(16'sd50, 16'sd50);
+
+    // Coincident frame_boundary + valid_in with a LARGER sample (not saturating)
+    @(negedge clk);
+    data_i_in      = 16'sd10000;
+    data_q_in      = 16'sd10000;
+    valid_in       = 1'b1;
+    frame_boundary = 1'b1;
+    @(posedge clk); #1;
+    @(negedge clk);
+    valid_in       = 1'b0;
+    frame_boundary = 1'b0;
+    @(posedge clk); #1;
+    @(posedge clk); #1;
+
+    // Peak should be max(|10000|,|10000|) = 10000 → [14:7] = 78
+    check(peak_magnitude == 8'd78,
+          "T18b.1: Coincident larger peak included (peak=78)");
+    // No saturation at gain 0
+    check(saturation_count == 8'd0,
+          "T18b.2: No saturation (gain=0, no overflow)");
+
+    // =================================================================
+    // Test 19: AGC enable toggle mid-frame
+    // Verify gain initializes from gain_shift and holdoff resets
+    // =================================================================
+    $display("");
+    $display("--- Test 19: AGC enable toggle mid-frame ---");
+
+    // ----- 19a: Enable AGC mid-frame, verify gain init -----
+    reset_n = 0;
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+    repeat (2) @(posedge clk);
+
+    gain_shift  = 4'b0_101;  // amplify x32 (shift left 5), internal = +5
+    agc_attack  = 4'd2;
+    agc_decay   = 4'd1;
+    agc_holdoff = 4'd3;
+    agc_target  = 8'd100;
+    agc_enable  = 0;         // start disabled
+    @(posedge clk); #1;
+
+    // With AGC off, current_gain should follow gain_shift directly
+    check(current_gain == 4'b0_101,
+          "T19a.1: AGC disabled → current_gain = gain_shift (0x5)");
+
+    // Send a few samples (building up frame metrics)
+    send_sample(16'sd1000, 16'sd1000);
+    send_sample(16'sd2000, 16'sd2000);
+
+    // Toggle AGC enable ON mid-frame
+    @(negedge clk);
+    agc_enable = 1;
+    @(posedge clk); #1;
+    @(posedge clk); #1;  // let enable transition register
+
+    // Gain should initialize from gain_shift encoding (0b0_101 → +5)
+    check(current_gain == 4'b0_101,
+          "T19a.2: AGC enabled mid-frame → gain initialized from gain_shift (+5)");
+
+    // Send a saturating sample, then boundary
+    send_sample(16'sd5000, 16'sd5000);  // 5000<<5 overflows
+    @(negedge clk); frame_boundary = 1; @(posedge clk); #1;
+    @(negedge clk); frame_boundary = 0; @(posedge clk); #1;
+    @(posedge clk); #1;
+
+    // AGC should attack: gain +5 → +5-2 = +3
+    check(current_gain == 4'b0_011,
+          "T19a.3: After boundary, AGC attacked (gain +5 → +3)");
+
+    // ----- 19b: Disable AGC mid-frame, verify passthrough -----
+    $display("");
+    $display("--- Test 19b: Disable AGC mid-frame ---");
+
+    // Change gain_shift to a new value
+    @(negedge clk);
+    gain_shift = 4'b1_010;  // attenuate by 2 (right shift 2)
+    agc_enable = 0;
+    @(posedge clk); #1;
+    @(posedge clk); #1;
+
+    // With AGC off, current_gain should follow gain_shift
+    check(current_gain == 4'b1_010,
+          "T19b.1: AGC disabled → current_gain = gain_shift (0xA, atten 2)");
+
+    // Send sample: 1000 >> 2 = 250
+    send_sample(16'sd1000, 16'sd0);
+    check(data_i_out == 16'sd250,
+          "T19b.2: Output uses host gain_shift when AGC off: 1000>>2=250");
+
+    // ----- 19c: Re-enable, verify gain re-initializes -----
+    @(negedge clk);
+    gain_shift = 4'b0_010;  // amplify by 4 (shift left 2), internal = +2
+    agc_enable = 1;
+    @(posedge clk); #1;
+    @(posedge clk); #1;
+
+    check(current_gain == 4'b0_010,
+          "T19c.1: AGC re-enabled → gain re-initialized from gain_shift (+2)");
+
+    // ---------------------------------------------------------------
     // SUMMARY
     // ---------------------------------------------------------------
     $display("");

@@ -504,6 +504,37 @@ module tb_cross_layer_ft2232h;
         check(cmd_opcode === 8'h27 && cmd_value === 16'h0003,
               "Cmd 0x27: DC_NOTCH_WIDTH=3");
 
+        // AGC registers (0x28-0x2C)
+        send_command_ft2232h(8'h28, 8'h00, 8'h00, 8'h01);  // AGC_ENABLE=1
+        $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",
+                8'h28, 8'h00, 16'h0001, cmd_opcode, cmd_addr, cmd_value);
+        check(cmd_opcode === 8'h28 && cmd_value === 16'h0001,
+              "Cmd 0x28: AGC_ENABLE=1");
+
+        send_command_ft2232h(8'h29, 8'h00, 8'h00, 8'hC8);  // AGC_TARGET=200
+        $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",
+                8'h29, 8'h00, 16'h00C8, cmd_opcode, cmd_addr, cmd_value);
+        check(cmd_opcode === 8'h29 && cmd_value === 16'h00C8,
+              "Cmd 0x29: AGC_TARGET=200");
+
+        send_command_ft2232h(8'h2A, 8'h00, 8'h00, 8'h02);  // AGC_ATTACK=2
+        $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",
+                8'h2A, 8'h00, 16'h0002, cmd_opcode, cmd_addr, cmd_value);
+        check(cmd_opcode === 8'h2A && cmd_value === 16'h0002,
+              "Cmd 0x2A: AGC_ATTACK=2");
+
+        send_command_ft2232h(8'h2B, 8'h00, 8'h00, 8'h03);  // AGC_DECAY=3
+        $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",
+                8'h2B, 8'h00, 16'h0003, cmd_opcode, cmd_addr, cmd_value);
+        check(cmd_opcode === 8'h2B && cmd_value === 16'h0003,
+              "Cmd 0x2B: AGC_DECAY=3");
+
+        send_command_ft2232h(8'h2C, 8'h00, 8'h00, 8'h06);  // AGC_HOLDOFF=6
+        $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",
+                8'h2C, 8'h00, 16'h0006, cmd_opcode, cmd_addr, cmd_value);
+        check(cmd_opcode === 8'h2C && cmd_value === 16'h0006,
+              "Cmd 0x2C: AGC_HOLDOFF=6");
+
         // Self-test / status
         send_command_ft2232h(8'h30, 8'h00, 8'h00, 8'h01);  // SELF_TEST_TRIGGER
         $fwrite(cmd_file, "%02x %02x %04x %02x %02x %04x\n",

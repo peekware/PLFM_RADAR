@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPlainTextEdit, QStatusBar, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QObject
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -173,8 +173,10 @@ class RadarDashboard(QMainWindow):
         self._gui_timer.timeout.connect(self._refresh_gui)
         self._gui_timer.start(100)
 
-        # Log handler for diagnostics
-        self._log_handler = _QtLogHandler(self._log_append)
+        # Log handler for diagnostics (thread-safe via Qt signal)
+        self._log_bridge = _LogSignalBridge(self)
+        self._log_bridge.log_message.connect(self._log_append)
+        self._log_handler = _QtLogHandler(self._log_bridge)
         self._log_handler.setLevel(logging.INFO)
         logging.getLogger().addHandler(self._log_handler)
 
@@ -403,7 +405,7 @@ class RadarDashboard(QMainWindow):
         self._targets_table_main = QTableWidget()
         self._targets_table_main.setColumnCount(5)
         self._targets_table_main.setHorizontalHeaderLabels([
-            "Range Bin", "Doppler Bin", "Magnitude", "SNR (dB)", "Track ID",
+            "Range (m)", "Velocity (m/s)", "Magnitude", "SNR (dB)", "Track ID",
         ])
         self._targets_table_main.setAlternatingRowColors(True)
         self._targets_table_main.setSelectionBehavior(
@@ -1719,15 +1721,22 @@ class RadarDashboard(QMainWindow):
 
 
 # =============================================================================
-# Qt-compatible log handler (routes Python logging -> QTextEdit)
+# Qt-compatible log handler (routes Python logging -> QTextEdit via signal)
 # =============================================================================
 
-class _QtLogHandler(logging.Handler):
-    """Sends log records to a callback (called on the thread that emitted)."""
 
-    def __init__(self, callback):
+class _LogSignalBridge(QObject):
+    """Thread-safe bridge: emits a Qt signal so the slot runs on the GUI thread."""
+
+    log_message = pyqtSignal(str)
+
+
+class _QtLogHandler(logging.Handler):
+    """Sends log records to a QObject signal (safe from any thread)."""
+
+    def __init__(self, bridge: _LogSignalBridge):
         super().__init__()
-        self._callback = callback
+        self._bridge = bridge
         self.setFormatter(logging.Formatter(
             "%(asctime)s  %(levelname)-8s  %(message)s",
             datefmt="%H:%M:%S",
@@ -1736,6 +1745,6 @@ class _QtLogHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            self._callback(msg)
+            self._bridge.log_message.emit(msg)
         except RuntimeError:
             pass

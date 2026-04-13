@@ -2117,8 +2117,9 @@ int main(void)
       runRadarPulseSequence();
 
       /* [AGC] Outer-loop AGC: read FPGA saturation flag (DIG_5 / PD13),
-       * adjust ADAR1000 VGA common gain once per radar frame (~258 ms). */
-      {
+       * adjust ADAR1000 VGA common gain once per radar frame (~258 ms).
+       * Only run when AGC is enabled — otherwise leave VGA gains untouched. */
+      if (outerAgc.enabled) {
           bool sat = HAL_GPIO_ReadPin(FPGA_DIG5_SAT_GPIO_Port,
                                       FPGA_DIG5_SAT_Pin) == GPIO_PIN_SET;
           outerAgc.update(sat);

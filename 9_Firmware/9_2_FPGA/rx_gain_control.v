@@ -86,6 +86,11 @@ reg [14:0] frame_peak;         // Peak |sample| this frame (15-bit unsigned)
 // Previous AGC enable state (for detecting 0→1 transition)
 reg agc_enable_prev;
 
+// Combinational helpers for inclusive frame-boundary snapshot
+// (used when valid_in and frame_boundary coincide)
+reg wire_frame_sat_incr;
+reg wire_frame_peak_update;
+
 // =========================================================================
 // EFFECTIVE GAIN SELECTION
 // =========================================================================
@@ -198,6 +203,15 @@ always @(posedge clk or negedge reset_n) begin
         // Track AGC enable transitions
         agc_enable_prev <= agc_enable;
 
+        // Compute inclusive metrics: if valid_in fires this cycle,
+        // include current sample in the snapshot taken at frame_boundary.
+        // This avoids losing the last sample when valid_in and
+        // frame_boundary coincide (NBA last-write-wins would otherwise
+        // snapshot stale values then reset, dropping the sample entirely).
+        wire_frame_sat_incr = (valid_in && (overflow_i || overflow_q)
+                               && (frame_sat_count != 8'hFF));
+        wire_frame_peak_update = (valid_in && (max_iq > frame_peak));
+
         // ---- Data pipeline (1-cycle latency) ----
         valid_out <= valid_in;
         if (valid_in) begin
@@ -215,9 +229,13 @@ always @(posedge clk or negedge reset_n) begin
 
         // ---- Frame boundary: AGC update + metric snapshot ----
         if (frame_boundary) begin
-            // Snapshot per-frame metrics to output registers
-            saturation_count <= frame_sat_count;
-            peak_magnitude   <= frame_peak[14:7];  // Upper 8 bits of 15-bit peak
+            // Snapshot per-frame metrics INCLUDING current sample if valid_in
+            saturation_count <= wire_frame_sat_incr
+                                ? (frame_sat_count + 8'd1)
+                                : frame_sat_count;
+            peak_magnitude   <= wire_frame_peak_update
+                                ? max_iq[14:7]
+                                : frame_peak[14:7];
 
             // Reset per-frame accumulators for next frame
             frame_sat_count <= 8'd0;
@@ -225,15 +243,17 @@ always @(posedge clk or negedge reset_n) begin
 
             if (agc_enable) begin
                 // AGC auto-adjustment at frame boundary
-                if (frame_sat_count > 8'd0) begin
+                // Use inclusive counts/peaks (accounting for simultaneous valid_in)
+                if (wire_frame_sat_incr || frame_sat_count > 8'd0) begin
                     // Clipping detected: reduce gain immediately (attack)
-                    agc_gain <= clamp_gain($signed({1'b0, agc_gain}) -
+                    agc_gain <= clamp_gain($signed({agc_gain[3], agc_gain}) -
                                            $signed({1'b0, agc_attack}));
                     holdoff_counter <= agc_holdoff;  // Reset holdoff
-                end else if (frame_peak[14:7] < agc_target) begin
+                end else if ((wire_frame_peak_update ? max_iq[14:7] : frame_peak[14:7])
+                             < agc_target) begin
                     // Signal too weak: increase gain after holdoff expires
                     if (holdoff_counter == 4'd0) begin
-                        agc_gain <= clamp_gain($signed({1'b0, agc_gain}) +
+                        agc_gain <= clamp_gain($signed({agc_gain[3], agc_gain}) +
                                                $signed({1'b0, agc_decay}));
                     end else begin
                         holdoff_counter <= holdoff_counter - 4'd1;
