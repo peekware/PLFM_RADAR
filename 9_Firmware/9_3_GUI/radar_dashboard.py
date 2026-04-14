@@ -43,7 +43,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # Import protocol layer (no GUI deps)
 from radar_protocol import (
-    RadarProtocol, FT2232HConnection, ReplayConnection,
+    RadarProtocol, FT2232HConnection,
     DataRecorder, RadarAcquisition,
     RadarFrame, StatusResponse,
     NUM_RANGE_BINS, NUM_DOPPLER_BINS, WATERFALL_DEPTH,
@@ -904,22 +904,13 @@ def main():
     parser = argparse.ArgumentParser(description="AERIS-10 Radar Dashboard")
     parser.add_argument("--live", action="store_true",
                         help="Use real FT2232H hardware (default: mock mode)")
-    parser.add_argument("--replay", type=str, metavar="NPY_DIR",
-                        help="Replay real data from .npy directory "
-                             "(e.g. tb/cosim/real_data/hex/)")
-    parser.add_argument("--no-mti", action="store_true",
-                        help="With --replay, use non-MTI Doppler data")
     parser.add_argument("--record", action="store_true",
                         help="Start HDF5 recording immediately")
     parser.add_argument("--device", type=int, default=0,
                         help="FT2232H device index (default: 0)")
     args = parser.parse_args()
 
-    if args.replay:
-        npy_dir = os.path.abspath(args.replay)
-        conn = ReplayConnection(npy_dir, use_mti=not args.no_mti)
-        mode_str = f"REPLAY ({npy_dir}, MTI={'OFF' if args.no_mti else 'ON'})"
-    elif args.live:
+    if args.live:
         conn = FT2232HConnection(mock=False)
         mode_str = "LIVE"
     else:
