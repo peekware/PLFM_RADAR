@@ -44,13 +44,18 @@ from typing import ClassVar
 
 import numpy as np
 
-import tkinter as tk
-from tkinter import ttk, filedialog
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog
 
-import matplotlib
-matplotlib.use("TkAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+    _HAS_GUI = True
+except (ModuleNotFoundError, ImportError):
+    _HAS_GUI = False
 
 # Import protocol layer (no GUI deps)
 from radar_protocol import (
