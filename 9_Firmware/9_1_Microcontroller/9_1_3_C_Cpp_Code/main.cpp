@@ -631,6 +631,27 @@ static bool system_emergency_state = false;
 SystemError_t checkSystemHealth(void) {
     SystemError_t current_error = ERROR_NONE;
 
+    // 0. Watchdog: detect main-loop stall (checkSystemHealth not called for >60 s).
+    //    Timestamp is captured at function ENTRY and updated unconditionally, so
+    //    any early return from a sub-check below cannot leave a stale value that
+    //    would later trip a spurious ERROR_WATCHDOG_TIMEOUT. A dedicated cold-start
+    //    branch ensures the first call after boot never trips (last_health_check==0
+    //    would otherwise make `HAL_GetTick() - 0 > 60000` true forever after the
+    //    60-s mark of the init sequence).
+    static uint32_t last_health_check = 0;
+    uint32_t now_tick = HAL_GetTick();
+    if (last_health_check == 0) {
+        last_health_check = now_tick;          // cold start: seed only
+    } else {
+        uint32_t elapsed = now_tick - last_health_check;
+        last_health_check = now_tick;          // update BEFORE any early return
+        if (elapsed > 60000) {
+            current_error = ERROR_WATCHDOG_TIMEOUT;
+            DIAG_ERR("SYS", "Health check: Watchdog timeout (>60s since last check)");
+            return current_error;
+        }
+    }
+
     // 1. Check AD9523 Clock Generator
     static uint32_t last_clock_check = 0;
     if (HAL_GetTick() - last_clock_check > 5000) {
@@ -734,14 +755,7 @@ SystemError_t checkSystemHealth(void) {
         return current_error;
     }
 
-    // 9. Simple watchdog check
-    static uint32_t last_health_check = 0;
-    if (HAL_GetTick() - last_health_check > 60000) {
-        current_error = ERROR_WATCHDOG_TIMEOUT;
-        DIAG_ERR("SYS", "Health check: Watchdog timeout (>60s since last check)");
-        return current_error;
-    }
-    last_health_check = HAL_GetTick();
+    // 9. Watchdog check is performed at function entry (see step 0).
 
     if (current_error != ERROR_NONE) {
         DIAG_ERR("SYS", "checkSystemHealth returning error code %d", current_error);
