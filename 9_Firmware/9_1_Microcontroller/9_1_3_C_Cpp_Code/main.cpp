@@ -620,7 +620,8 @@ typedef enum {
     ERROR_POWER_SUPPLY,
     ERROR_TEMPERATURE_HIGH,
     ERROR_MEMORY_ALLOC,
-    ERROR_WATCHDOG_TIMEOUT
+    ERROR_WATCHDOG_TIMEOUT,
+    ERROR_COUNT  // must be last — used for bounds checking error_strings[]
 } SystemError_t;
 
 static SystemError_t last_error = ERROR_NONE;
@@ -867,7 +868,7 @@ void handleSystemError(SystemError_t error) {
     DIAG_ERR("SYS", "handleSystemError: error=%d error_count=%lu", error, error_count);
 
     char error_msg[100];
-    const char* error_strings[] = {
+    static const char* const error_strings[] = {
         "No error",
         "AD9523 Clock failure",
         "ADF4382 TX LO unlocked",
@@ -887,9 +888,16 @@ void handleSystemError(SystemError_t error) {
         "Watchdog timeout"
     };
 
+    static_assert(sizeof(error_strings) / sizeof(error_strings[0]) == ERROR_COUNT,
+                  "error_strings[] and SystemError_t enum are out of sync");
+
+    const char* err_name = (error >= 0 && error < (int)(sizeof(error_strings) / sizeof(error_strings[0])))
+                           ? error_strings[error]
+                           : "Unknown error";
+
     snprintf(error_msg, sizeof(error_msg),
              "ERROR #%d: %s (Count: %lu)\r\n",
-             error, error_strings[error], error_count);
+             error, err_name, error_count);
     HAL_UART_Transmit(&huart3, (uint8_t*)error_msg, strlen(error_msg), 1000);
 
     // Blink LED pattern based on error code
@@ -915,7 +923,7 @@ void handleSystemError(SystemError_t error) {
     if ((error >= ERROR_RF_PA_OVERCURRENT && error <= ERROR_POWER_SUPPLY) ||
         error == ERROR_TEMPERATURE_HIGH ||
         error == ERROR_WATCHDOG_TIMEOUT) {
-        DIAG_ERR("SYS", "CRITICAL ERROR (code %d: %s) -- initiating Emergency_Stop()", error, error_strings[error]);
+        DIAG_ERR("SYS", "CRITICAL ERROR (code %d: %s) -- initiating Emergency_Stop()", error, err_name);
         snprintf(error_msg, sizeof(error_msg),
                  "CRITICAL ERROR! Initiating emergency shutdown.\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)error_msg, strlen(error_msg), 1000);
