@@ -175,7 +175,7 @@ float RADAR_Altitude;
 double RADAR_Longitude = 0;
 double RADAR_Latitude = 0;
 
-extern uint8_t GUI_start_flag_received;
+extern uint8_t GUI_start_flag_received;  // [STM32-006] Legacy, unused -- kept for linker compat
 
 
 //RADAR
@@ -1177,7 +1177,14 @@ static int configure_ad9523(void)
 
     // init ad9523 defaults (fills any missing pdata defaults)
     DIAG("CLK", "Calling ad9523_init() -- fills pdata defaults");
-    ad9523_init(&init_param);
+    {
+        int32_t init_ret = ad9523_init(&init_param);
+        DIAG("CLK", "ad9523_init() returned %ld", (long)init_ret);
+        if (init_ret != 0) {
+            DIAG_ERR("CLK", "ad9523_init() FAILED (ret=%ld) -- calling Error_Handler()", (long)init_ret);
+            Error_Handler();
+        }
+    }
 
     /* [Bug #2 FIXED] Removed first ad9523_setup() call that was here.
      * It wrote to the chip while still in reset — writes were lost.
@@ -1800,29 +1807,11 @@ int main(void)
       HAL_UART_Transmit(&huart3, (uint8_t*)gps_send_error, sizeof(gps_send_error) - 1, 1000);
   }
 
-  // Check if start flag was received and settings are ready
-  do{
-	  if (usbHandler.isStartFlagReceived() &&
-		  usbHandler.getState() == USBHandler::USBState::READY_FOR_DATA) {
-
-		  const RadarSettings& settings = usbHandler.getSettings();
-
-		  // Use the settings to configure your radar system
-		  /*
-			  settings.getSystemFrequency();
-			  settings.getChirpDuration1();
-			  settings.getChirpDuration2();
-			  settings.getChirpsPerPosition();
-			  settings.getFreqMin();
-			  settings.getFreqMax();
-			  settings.getPRF1();
-			  settings.getPRF2();
-			  settings.getMaxDistance();
-			  */
-
-
-              }
-  }while(!usbHandler.isStartFlagReceived());
+  /* [STM32-006 FIXED] Removed blocking do-while loop that waited for
+   * usbHandler.isStartFlagReceived().  The production V7 PyQt GUI does not
+   * send the legacy 4-byte start flag [23,46,158,237], so this loop hung
+   * the MCU at boot indefinitely.  The USB settings handshake (if ever
+   * re-enabled) should be handled non-blocking in the main loop. */
 
   /***************************************************************/
   /************RF Power Amplifier Powering up sequence************/

@@ -404,16 +404,14 @@ always @(posedge clk or negedge reset_n) begin
         // Default: no pulse
         new_frame_pulse <= 1'b0;
         
-        // Dynamic frame detection using host_chirps_per_elev.
-        // Detect frame boundary when chirp_counter changes AND is a
-        // multiple of host_chirps_per_elev (0, N, 2N, 3N, ...).
-        // Uses a modulo counter that resets at host_chirps_per_elev.
-        if (chirp_counter != chirp_counter_prev) begin
-            if (chirp_counter == 6'd0 ||
-                chirp_counter == host_chirps_per_elev ||
-                chirp_counter == {host_chirps_per_elev, 1'b0}) begin
-                new_frame_pulse <= 1'b1;
-            end
+        // [FPGA-001 FIXED] Detect frame boundary when chirp_counter wraps to 0.
+        // The chirp_counter (driven by radar_mode_controller) counts 0..N-1
+        // and wraps back to 0 at the start of each new frame.  Previous code
+        // also checked (== host_chirps_per_elev) and (== 2*host_chirps_per_elev)
+        // which were unreachable dead conditions for any N, since the counter
+        // never reaches N.  Now works correctly for any chirps_per_elev value.
+        if (chirp_counter != chirp_counter_prev && chirp_counter == 6'd0) begin
+            new_frame_pulse <= 1'b1;
         end
         
         // Store previous value
