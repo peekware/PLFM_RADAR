@@ -64,7 +64,7 @@ TESTS_STANDALONE := test_bug12_pa_cal_loop_inverted \
                     test_gap3_iwdg_config \
                     test_gap3_temperature_max \
                     test_gap3_idq_periodic_reread \
-                    test_gap3_emergency_state_ordering \r
+                    test_gap3_emergency_state_ordering \
                     test_gap3_overtemp_emergency_stop
 
 # Tests that need platform_noos_stm32.o + mocks
@@ -77,7 +77,7 @@ ALL_TESTS := $(TESTS_WITH_REAL) $(TESTS_MOCK_ONLY) $(TESTS_STANDALONE) $(TESTS_W
 
 .PHONY: all build test clean \
         $(addprefix test_,bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11 bug12 bug13 bug14 bug15) \
-        test_gap3_estop test_gap3_iwdg test_gap3_temp test_gap3_idq test_gap3_order \r
+        test_gap3_estop test_gap3_iwdg test_gap3_temp test_gap3_idq test_gap3_order \
         test_gap3_overtemp
 
 all: build test
