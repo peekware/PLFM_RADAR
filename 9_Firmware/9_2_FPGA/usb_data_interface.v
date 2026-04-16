@@ -29,7 +29,7 @@ module usb_data_interface (
     // FT601 Interface (Slave FIFO mode)
     // Data bus
     inout wire [31:0] ft601_data,    // 32-bit bidirectional data bus
-    output reg [3:0] ft601_be,       // Byte enable (active-HIGH per FT601 datasheet / AN_378)
+    output reg [3:0] ft601_be,       // Byte enable (active-HIGH per DS_FT600Q-FT601Q Table 3.2)
     
     // Control signals
     // VESTIGIAL OUTPUTS — kept for 200T board port compatibility.
@@ -374,7 +374,7 @@ always @(posedge ft601_clk_in or negedge ft601_effective_reset_n) begin
             // Word 4: AGC metrics + range_mode
             status_words[4] <= {status_agc_current_gain,        // [31:28]
                                 status_agc_peak_magnitude,      // [27:20]
-                                status_agc_saturation_count,    // [19:12]
+                                status_agc_saturation_count,    // [19:12] 8-bit saturation count
                                 status_agc_enable,              // [11]
                                 9'd0,                           // [10:2] reserved
                                 status_range_mode};             // [1:0]
