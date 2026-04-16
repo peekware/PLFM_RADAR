@@ -61,6 +61,20 @@ _has_cxx = subprocess.run(
     [CXX, "--version"], capture_output=True
 ).returncode == 0
 
+# In CI, missing tools must be a hard failure — never silently skip.
+_in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+if _in_ci:
+    if not _has_iverilog:
+        raise RuntimeError(
+            "iverilog is required in CI but was not found. "
+            "Ensure 'apt-get install iverilog' ran and IVERILOG/VVP are on PATH."
+        )
+    if not _has_cxx:
+        raise RuntimeError(
+            "C++ compiler is required in CI but was not found. "
+            "Ensure build-essential is installed."
+        )
+
 
 def _parse_hex_results(text: str) -> list[dict[str, str]]:
     """Parse space-separated hex lines from TB output files."""
