@@ -46,7 +46,9 @@ extern "C" {
 #include <vector>
 #include "stm32_spi.h"
 #include "stm32_delay.h"
-#include "TinyGPSPlus.h"
+extern "C" {
+#include "um982_gps.h"
+}
 extern "C" {
 #include "GY_85_HAL.h"
 }
@@ -121,8 +123,8 @@ UART_HandleTypeDef huart5;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-// The TinyGPSPlus object
-TinyGPSPlus gps;
+// UM982 dual-antenna GPS receiver
+UM982_GPS_t um982;
 
 // Global data structures
 GPS_Data_t current_gps_data = {0};
@@ -173,7 +175,7 @@ float RADAR_Altitude;
 double RADAR_Longitude = 0;
 double RADAR_Latitude = 0;
 
-extern uint8_t GUI_start_flag_received;
+extern uint8_t GUI_start_flag_received;  // [STM32-006] Legacy, unused -- kept for linker compat
 
 
 //RADAR
@@ -722,14 +724,11 @@ SystemError_t checkSystemHealth(void) {
         last_bmp_check = HAL_GetTick();
     }
 
-    // 6. Check GPS Communication
-    static uint32_t last_gps_fix = 0;
-    if (gps.location.isUpdated()) {
-        last_gps_fix = HAL_GetTick();
-    }
-    if (HAL_GetTick() - last_gps_fix > 30000) {
+    // 6. Check GPS Communication (30s grace period from boot / last valid fix)
+    uint32_t gps_fix_age = um982_position_age(&um982);
+    if (gps_fix_age > 30000) {
         current_error = ERROR_GPS_COMM;
-        DIAG_WARN("SYS", "Health check: GPS no fix for >30s");
+        DIAG_WARN("SYS", "Health check: GPS no fix for >30s (age=%lu ms)", (unsigned long)gps_fix_age);
         return current_error;
     }
 
@@ -1056,20 +1055,7 @@ static inline void delay_ms(uint32_t ms) { HAL_Delay(ms); }
 
 
 
-// This custom version of delay() ensures that the gps object
-// is being "fed".
-static void smartDelay(unsigned long ms)
-{
-    uint32_t start = HAL_GetTick();
-    uint8_t ch;
-
-    do {
-        // While there is new data available in UART (non-blocking)
-        if (HAL_UART_Receive(&huart5, &ch, 1, 0) == HAL_OK) {
-            gps.encode(ch);   // Pass received byte to TinyGPS++ equivalent parser
-        }
-    } while (HAL_GetTick() - start < ms);
-}
+// smartDelay removed -- replaced by non-blocking um982_process() in main loop
 
 // Small helper to enable DWT cycle counter for microdelay
 static void DWT_Init(void)
@@ -1213,7 +1199,14 @@ static int configure_ad9523(void)
 
     // init ad9523 defaults (fills any missing pdata defaults)
     DIAG("CLK", "Calling ad9523_init() -- fills pdata defaults");
-    ad9523_init(&init_param);
+    {
+        int32_t init_ret = ad9523_init(&init_param);
+        DIAG("CLK", "ad9523_init() returned %ld", (long)init_ret);
+        if (init_ret != 0) {
+            DIAG_ERR("CLK", "ad9523_init() FAILED (ret=%ld)", (long)init_ret);
+            return -1;
+        }
+    }
 
     /* [Bug #2 FIXED] Removed first ad9523_setup() call that was here.
      * It wrote to the chip while still in reset — writes were lost.
@@ -1602,6 +1595,12 @@ int main(void)
     Yaw_Sensor = (180*atan2(magRawY,magRawX)/PI) - Mag_Declination;
 
     if(Yaw_Sensor<0)Yaw_Sensor+=360;
+
+    // Override magnetometer heading with UM982 dual-antenna heading when available
+    if (um982_is_heading_valid(&um982)) {
+        Yaw_Sensor = um982_get_heading(&um982);
+    }
+
     RxEst_0 = RxEst_1;
     RyEst_0 = RyEst_1;
     RzEst_0 = RzEst_1;
@@ -1777,10 +1776,34 @@ int main(void)
   	//////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////GPS/////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////
-  for(int i=0; i<10;i++){
-  smartDelay(1000);
-  RADAR_Longitude = gps.location.lng();
-  RADAR_Latitude = gps.location.lat();
+  DIAG_SECTION("GPS INIT (UM982)");
+  DIAG("GPS", "Initializing UM982 on UART5 @ 115200 (baseline=50cm, tol=3cm)");
+  if (!um982_init(&um982, &huart5, 50.0f, 3.0f)) {
+      DIAG_WARN("GPS", "UM982 init: no VERSIONA response -- module may need more time");
+      // Not fatal: module may still start sending NMEA data after boot
+  } else {
+      DIAG("GPS", "UM982 init OK -- VERSIONA received");
+  }
+
+  // Collect GPS data for a few seconds (non-blocking pump)
+  DIAG("GPS", "Pumping GPS for 5 seconds to acquire initial fix...");
+  {
+      uint32_t gps_start = HAL_GetTick();
+      while (HAL_GetTick() - gps_start < 5000) {
+          um982_process(&um982);
+          HAL_Delay(10);
+      }
+  }
+  RADAR_Longitude = um982_get_longitude(&um982);
+  RADAR_Latitude = um982_get_latitude(&um982);
+  DIAG("GPS", "Initial position: lat=%.6f lon=%.6f fix=%d sats=%d",
+       RADAR_Latitude, RADAR_Longitude,
+       um982_get_fix_quality(&um982), um982_get_num_sats(&um982));
+
+  // Re-apply heading after GPS init so the north-alignment stepper move uses
+  // UM982 dual-antenna heading when available.
+  if (um982_is_heading_valid(&um982)) {
+      Yaw_Sensor = um982_get_heading(&um982);
   }
 
   //move Stepper to position 1 = 0°
@@ -1806,29 +1829,11 @@ int main(void)
       HAL_UART_Transmit(&huart3, (uint8_t*)gps_send_error, sizeof(gps_send_error) - 1, 1000);
   }
 
-  // Check if start flag was received and settings are ready
-  do{
-	  if (usbHandler.isStartFlagReceived() &&
-		  usbHandler.getState() == USBHandler::USBState::READY_FOR_DATA) {
-
-		  const RadarSettings& settings = usbHandler.getSettings();
-
-		  // Use the settings to configure your radar system
-		  /*
-			  settings.getSystemFrequency();
-			  settings.getChirpDuration1();
-			  settings.getChirpDuration2();
-			  settings.getChirpsPerPosition();
-			  settings.getFreqMin();
-			  settings.getFreqMax();
-			  settings.getPRF1();
-			  settings.getPRF2();
-			  settings.getMaxDistance();
-			  */
-
-
-              }
-  }while(!usbHandler.isStartFlagReceived());
+  /* [STM32-006 FIXED] Removed blocking do-while loop that waited for
+   * usbHandler.isStartFlagReceived().  The production V7 PyQt GUI does not
+   * send the legacy 4-byte start flag [23,46,158,237], so this loop hung
+   * the MCU at boot indefinitely.  The USB settings handshake (if ever
+   * re-enabled) should be handled non-blocking in the main loop. */
 
   /***************************************************************/
   /************RF Power Amplifier Powering up sequence************/
@@ -2053,6 +2058,18 @@ int main(void)
 	        }
 	        DIAG("SYS", "Exited safe mode blink loop -- system_emergency_state cleared");
 	    }
+
+	  //////////////////////////////////////////////////////////////////////////////////////
+	  ////////////////////////// GPS: Non-blocking NMEA processing ////////////////////////
+	  //////////////////////////////////////////////////////////////////////////////////////
+	  um982_process(&um982);
+
+	  // Update position globals continuously
+	  if (um982_is_position_valid(&um982)) {
+	      RADAR_Latitude = um982_get_latitude(&um982);
+	      RADAR_Longitude = um982_get_longitude(&um982);
+	  }
+
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  ////////////////////////// Monitor ADF4382A lock status periodically//////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
@@ -2603,7 +2620,7 @@ static void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 9600;
+  huart5.Init.BaudRate = 115200;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;
