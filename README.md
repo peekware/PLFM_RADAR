@@ -111,7 +111,7 @@ The AERIS-10 main sub-systems are:
    - Map integration
    - Radar control interface
 
-![AERIS-10 Dashboard](https://raw.githubusercontent.com/NawfalMotii79/PLFM_RADAR/main/8_Utils/GUI_V65_Tk.png)
+![AERIS-10 Dashboard](https://raw.githubusercontent.com/NawfalMotii79/PLFM_RADAR/main/8_Utils/GUI_V6.gif)
 <!-- V6 GIF removed — V6 is deprecated. V65 Tk and V7 PyQt6 are the active GUIs. -->
 
 ## 📊 Technical Specifications
