@@ -16,10 +16,18 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
     
     # Target parameters
     targets = [
-        {'range': 3000, 'velocity': 25, 'snr': 30, 'azimuth': 10, 'elevation': 5},   # Fast moving target
-        {'range': 5000, 'velocity': -15, 'snr': 25, 'azimuth': 20, 'elevation': 2},  # Approaching target
-        {'range': 8000, 'velocity': 5, 'snr': 20, 'azimuth': 30, 'elevation': 8},    # Slow moving target
-        {'range': 12000, 'velocity': -8, 'snr': 18, 'azimuth': 45, 'elevation': 3},  # Distant target
+        {
+            'range': 3000, 'velocity': 25, 'snr': 30, 'azimuth': 10, 'elevation': 5
+        },  # Fast moving target
+        {
+            'range': 5000, 'velocity': -15, 'snr': 25, 'azimuth': 20, 'elevation': 2
+        },  # Approaching target
+        {
+            'range': 8000, 'velocity': 5, 'snr': 20, 'azimuth': 30, 'elevation': 8
+        },  # Slow moving target
+        {
+            'range': 12000, 'velocity': -8, 'snr': 18, 'azimuth': 45, 'elevation': 3
+        },  # Distant target
     ]
     
     # Noise parameters
@@ -30,7 +38,6 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
     chirp_number = 0
     
     # Generate Long Chirps (30µs duration equivalent)
-    print("Generating Long Chirps...")
     for chirp in range(num_long_chirps):
         for sample in range(samples_per_chirp):
             # Base noise
@@ -38,7 +45,7 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
             q_val = np.random.normal(0, noise_std)
             
             # Add clutter (stationary targets)
-            clutter_range = 2000  # Fixed clutter at 2km
+            _clutter_range = 2000  # Fixed clutter at 2km
             if sample < 100:  # Simulate clutter in first 100 samples
                 i_val += np.random.normal(0, clutter_std)
                 q_val += np.random.normal(0, clutter_std)
@@ -47,7 +54,9 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
             for target in targets:
                 # Calculate range bin (simplified)
                 range_bin = int(target['range'] / 20)  # ~20m per bin
-                doppler_phase = 2 * math.pi * target['velocity'] * chirp / 100  # Doppler phase shift
+                doppler_phase = (
+                    2 * math.pi * target['velocity'] * chirp / 100
+                )  # Doppler phase shift
                 
                 # Target appears around its range bin with some spread
                 if abs(sample - range_bin) < 10:
@@ -80,7 +89,6 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
     timestamp_ns += 175400  # 175.4µs guard time
     
     # Generate Short Chirps (0.5µs duration equivalent)
-    print("Generating Short Chirps...")
     for chirp in range(num_short_chirps):
         for sample in range(samples_per_chirp):
             # Base noise
@@ -96,7 +104,9 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
             for target in targets:
                 # Range bin calculation (different for short chirps)
                 range_bin = int(target['range'] / 40)  # Different range resolution
-                doppler_phase = 2 * math.pi * target['velocity'] * (chirp + 5) / 80  # Different Doppler
+                doppler_phase = (
+                    2 * math.pi * target['velocity'] * (chirp + 5) / 80
+                )  # Different Doppler
                 
                 # Target appears around its range bin
                 if abs(sample - range_bin) < 8:
@@ -130,11 +140,6 @@ def generate_radar_csv(filename="pulse_compression_output.csv"):
     
     # Save to CSV
     df.to_csv(filename, index=False)
-    print(f"Generated CSV file: {filename}")
-    print(f"Total samples: {len(df)}")
-    print(f"Long chirps: {num_long_chirps}, Short chirps: {num_short_chirps}")
-    print(f"Samples per chirp: {samples_per_chirp}")
-    print(f"File size: {len(df) // 1000}K samples")
     
     return df
 
@@ -142,15 +147,11 @@ def analyze_generated_data(df):
     """
     Analyze the generated data to verify target detection
     """
-    print("\n=== Data Analysis ===")
     
     # Basic statistics
-    long_chirps = df[df['chirp_type'] == 'LONG']
-    short_chirps = df[df['chirp_type'] == 'SHORT']
+    df[df['chirp_type'] == 'LONG']
+    df[df['chirp_type'] == 'SHORT']
     
-    print(f"Long chirp samples: {len(long_chirps)}")
-    print(f"Short chirp samples: {len(short_chirps)}")
-    print(f"Unique chirp numbers: {df['chirp_number'].nunique()}")
     
     # Calculate actual magnitude and phase for analysis
     df['magnitude'] = np.sqrt(df['I_value']**2 + df['Q_value']**2)
@@ -160,15 +161,11 @@ def analyze_generated_data(df):
     high_mag_threshold = df['magnitude'].quantile(0.95)  # Top 5%
     targets_detected = df[df['magnitude'] > high_mag_threshold]
     
-    print(f"\nTarget detection threshold: {high_mag_threshold:.2f}")
-    print(f"High magnitude samples: {len(targets_detected)}")
     
     # Group by chirp type
-    long_targets = targets_detected[targets_detected['chirp_type'] == 'LONG']
-    short_targets = targets_detected[targets_detected['chirp_type'] == 'SHORT']
+    targets_detected[targets_detected['chirp_type'] == 'LONG']
+    targets_detected[targets_detected['chirp_type'] == 'SHORT']
     
-    print(f"Targets in long chirps: {len(long_targets)}")
-    print(f"Targets in short chirps: {len(short_targets)}")
     
     return df
 
@@ -179,10 +176,3 @@ if __name__ == "__main__":
     # Analyze the generated data
     analyze_generated_data(df)
     
-    print("\n=== CSV File Ready ===")
-    print("You can now test the Python GUI with this CSV file!")
-    print("The file contains:")
-    print("- 16 Long chirps + 16 Short chirps")
-    print("- 4 simulated targets at different ranges and velocities")
-    print("- Realistic noise and clutter")
-    print("- Proper I/Q data for Doppler processing")

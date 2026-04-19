@@ -3,6 +3,7 @@
 [![Hardware: CERN-OHL-P](https://img.shields.io/badge/Hardware-CERN--OHL--P-blue.svg)](https://ohwr.org/cern_ohl_p_v2.txt)
 [![Software: MIT](https://img.shields.io/badge/Software-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/NawfalMotii79/PLFM_RADAR)
+[![Features: Work in Progress](https://img.shields.io/badge/Features-Work_in_Progress-yellow)](https://github.com/NawfalMotii79/PLFM_RADAR/issues)
 [![Frequency: 10.5GHz](https://img.shields.io/badge/Frequency-10.5GHz-blue)](https://github.com/NawfalMotii79/PLFM_RADAR)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/NawfalMotii79/PLFM_RADAR/pulls)
 
@@ -52,7 +53,7 @@ The AERIS-10 main sub-systems are:
   - **XC7A50T FPGA** - Handles RADAR Signal Processing on the upstream FTG256 board:
     - PLFM Chirps generation via the DAC
     - Raw ADC data read
-    - Automatic Gain Control (AGC)
+    - Hybrid Automatic Gain Control (AGC) — cross-layer FPGA/STM32/GUI loop
     - I/Q Baseband Down-Conversion
     - Decimation
     - Filtering
@@ -110,7 +111,8 @@ The AERIS-10 main sub-systems are:
    - Map integration
    - Radar control interface
 
-![AERIS-10 GUI Demo](https://raw.githubusercontent.com/NawfalMotii79/PLFM_RADAR/main/8_Utils/GUI_V6.gif)
+![AERIS-10 Dashboard](https://raw.githubusercontent.com/NawfalMotii79/PLFM_RADAR/main/8_Utils/GUI_V6.gif)
+<!-- V6 GIF removed — V6 is deprecated. V65 Tk and V7 PyQt6 are the active GUIs. -->
 
 ## 📊 Technical Specifications
 

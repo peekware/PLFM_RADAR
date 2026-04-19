@@ -129,6 +129,14 @@ void Error_Handler(void);
 #define GYR_INT_Pin GPIO_PIN_8
 #define GYR_INT_GPIO_Port GPIOC
 
+/* FPGA digital I/O (directly connected GPIOs) */
+#define FPGA_DIG5_SAT_Pin       GPIO_PIN_13
+#define FPGA_DIG5_SAT_GPIO_Port GPIOD
+#define FPGA_DIG6_Pin           GPIO_PIN_14
+#define FPGA_DIG6_GPIO_Port     GPIOD
+#define FPGA_DIG7_Pin           GPIO_PIN_15
+#define FPGA_DIG7_GPIO_Port     GPIOD
+
 #ifdef __cplusplus
 }
 #endif

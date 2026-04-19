@@ -21,8 +21,8 @@
 #include "usb_device.h"
 #include "USBHandler.h"
 #include "usbd_cdc_if.h"
-#include "adar1000.h"
 #include "ADAR1000_Manager.h"
+#include "ADAR1000_AGC.h"
 extern "C" {
 #include "ad9523.h"
 }
@@ -45,7 +45,9 @@ extern "C" {
 #include <vector>
 #include "stm32_spi.h"
 #include "stm32_delay.h"
-#include "TinyGPSPlus.h"
+extern "C" {
+#include "um982_gps.h"
+}
 extern "C" {
 #include "GY_85_HAL.h"
 }
@@ -120,8 +122,8 @@ UART_HandleTypeDef huart5;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-// The TinyGPSPlus object
-TinyGPSPlus gps;
+// UM982 dual-antenna GPS receiver
+UM982_GPS_t um982;
 
 // Global data structures
 GPS_Data_t current_gps_data = {0};
@@ -172,7 +174,7 @@ float RADAR_Altitude;
 double RADAR_Longitude = 0;
 double RADAR_Latitude = 0;
 
-extern uint8_t GUI_start_flag_received;
+extern uint8_t GUI_start_flag_received;  // [STM32-006] Legacy, unused -- kept for linker compat
 
 
 //RADAR
@@ -224,6 +226,7 @@ extern SPI_HandleTypeDef hspi4;
 //ADAR1000
 
 ADAR1000Manager adarManager;
+ADAR1000_AGC    outerAgc;
 static uint8_t matrix1[15][16];
 static uint8_t matrix2[15][16];
 static uint8_t vector_0[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -618,7 +621,8 @@ typedef enum {
     ERROR_POWER_SUPPLY,
     ERROR_TEMPERATURE_HIGH,
     ERROR_MEMORY_ALLOC,
-    ERROR_WATCHDOG_TIMEOUT
+    ERROR_WATCHDOG_TIMEOUT,
+    ERROR_COUNT  // must be last — used for bounds checking error_strings[]
 } SystemError_t;
 
 static SystemError_t last_error = ERROR_NONE;
@@ -628,6 +632,27 @@ static bool system_emergency_state = false;
 // Error handler function
 SystemError_t checkSystemHealth(void) {
     SystemError_t current_error = ERROR_NONE;
+
+    // 0. Watchdog: detect main-loop stall (checkSystemHealth not called for >60 s).
+    //    Timestamp is captured at function ENTRY and updated unconditionally, so
+    //    any early return from a sub-check below cannot leave a stale value that
+    //    would later trip a spurious ERROR_WATCHDOG_TIMEOUT. A dedicated cold-start
+    //    branch ensures the first call after boot never trips (last_health_check==0
+    //    would otherwise make `HAL_GetTick() - 0 > 60000` true forever after the
+    //    60-s mark of the init sequence).
+    static uint32_t last_health_check = 0;
+    uint32_t now_tick = HAL_GetTick();
+    if (last_health_check == 0) {
+        last_health_check = now_tick;          // cold start: seed only
+    } else {
+        uint32_t elapsed = now_tick - last_health_check;
+        last_health_check = now_tick;          // update BEFORE any early return
+        if (elapsed > 60000) {
+            current_error = ERROR_WATCHDOG_TIMEOUT;
+            DIAG_ERR("SYS", "Health check: Watchdog timeout (>60s since last check)");
+            return current_error;
+        }
+    }
 
     // 1. Check AD9523 Clock Generator
     static uint32_t last_clock_check = 0;
@@ -639,6 +664,7 @@ SystemError_t checkSystemHealth(void) {
         if (s0 == GPIO_PIN_RESET || s1 == GPIO_PIN_RESET) {
             current_error = ERROR_AD9523_CLOCK;
             DIAG_ERR("CLK", "AD9523 clock health check FAILED (STATUS0=%d STATUS1=%d)", s0, s1);
+            return current_error;
         }
         last_clock_check = HAL_GetTick();
     }
@@ -649,10 +675,12 @@ SystemError_t checkSystemHealth(void) {
         if (!tx_locked) {
             current_error = ERROR_ADF4382_TX_UNLOCK;
             DIAG_ERR("LO", "Health check: TX LO UNLOCKED");
+            return current_error;
         }
         if (!rx_locked) {
             current_error = ERROR_ADF4382_RX_UNLOCK;
             DIAG_ERR("LO", "Health check: RX LO UNLOCKED");
+            return current_error;
         }
     }
 
@@ -661,14 +689,14 @@ SystemError_t checkSystemHealth(void) {
         if (!adarManager.verifyDeviceCommunication(i)) {
             current_error = ERROR_ADAR1000_COMM;
             DIAG_ERR("BF", "Health check: ADAR1000 #%d comm FAILED", i);
-            break;
+            return current_error;
         }
 
         float temp = adarManager.readTemperature(i);
         if (temp > 85.0f) {
             current_error = ERROR_ADAR1000_TEMP;
             DIAG_ERR("BF", "Health check: ADAR1000 #%d OVERTEMP %.1fC > 85C", i, temp);
-            break;
+            return current_error;
         }
     }
 
@@ -678,6 +706,7 @@ SystemError_t checkSystemHealth(void) {
         if (!GY85_Update(&imu)) {
             current_error = ERROR_IMU_COMM;
             DIAG_ERR("IMU", "Health check: GY85_Update() FAILED");
+            return current_error;
         }
         last_imu_check = HAL_GetTick();
     }
@@ -689,18 +718,17 @@ SystemError_t checkSystemHealth(void) {
         if (pressure < 30000.0 || pressure > 110000.0 || isnan(pressure)) {
             current_error = ERROR_BMP180_COMM;
             DIAG_ERR("SYS", "Health check: BMP180 pressure out of range: %.0f", pressure);
+            return current_error;
         }
         last_bmp_check = HAL_GetTick();
     }
 
-    // 6. Check GPS Communication
-    static uint32_t last_gps_fix = 0;
-    if (gps.location.isUpdated()) {
-        last_gps_fix = HAL_GetTick();
-    }
-    if (HAL_GetTick() - last_gps_fix > 30000) {
+    // 6. Check GPS Communication (30s grace period from boot / last valid fix)
+    uint32_t gps_fix_age = um982_position_age(&um982);
+    if (gps_fix_age > 30000) {
         current_error = ERROR_GPS_COMM;
-        DIAG_WARN("SYS", "Health check: GPS no fix for >30s");
+        DIAG_WARN("SYS", "Health check: GPS no fix for >30s (age=%lu ms)", (unsigned long)gps_fix_age);
+        return current_error;
     }
 
     // 7. Check RF Power Amplifier Current
@@ -709,12 +737,12 @@ SystemError_t checkSystemHealth(void) {
             if (Idq_reading[i] > 2.5f) {
                 current_error = ERROR_RF_PA_OVERCURRENT;
                 DIAG_ERR("PA", "Health check: PA ch%d OVERCURRENT Idq=%.3fA > 2.5A", i, Idq_reading[i]);
-                break;
+                return current_error;
             }
             if (Idq_reading[i] < 0.1f) {
                 current_error = ERROR_RF_PA_BIAS;
                 DIAG_ERR("PA", "Health check: PA ch%d BIAS FAULT Idq=%.3fA < 0.1A", i, Idq_reading[i]);
-                break;
+                return current_error;
             }
         }
     }
@@ -723,15 +751,10 @@ SystemError_t checkSystemHealth(void) {
     if (temperature > 75.0f) {
         current_error = ERROR_TEMPERATURE_HIGH;
         DIAG_ERR("SYS", "Health check: System OVERTEMP %.1fC > 75C", temperature);
+        return current_error;
     }
 
-    // 9. Simple watchdog check
-    static uint32_t last_health_check = 0;
-    if (HAL_GetTick() - last_health_check > 60000) {
-        current_error = ERROR_WATCHDOG_TIMEOUT;
-        DIAG_ERR("SYS", "Health check: Watchdog timeout (>60s since last check)");
-    }
-    last_health_check = HAL_GetTick();
+    // 9. Watchdog check is performed at function entry (see step 0).
 
     if (current_error != ERROR_NONE) {
         DIAG_ERR("SYS", "checkSystemHealth returning error code %d", current_error);
@@ -843,7 +866,7 @@ void handleSystemError(SystemError_t error) {
     DIAG_ERR("SYS", "handleSystemError: error=%d error_count=%lu", error, error_count);
 
     char error_msg[100];
-    const char* error_strings[] = {
+    static const char* const error_strings[] = {
         "No error",
         "AD9523 Clock failure",
         "ADF4382 TX LO unlocked",
@@ -863,9 +886,16 @@ void handleSystemError(SystemError_t error) {
         "Watchdog timeout"
     };
 
+    static_assert(sizeof(error_strings) / sizeof(error_strings[0]) == ERROR_COUNT,
+                  "error_strings[] and SystemError_t enum are out of sync");
+
+    const char* err_name = (error >= 0 && error < (int)(sizeof(error_strings) / sizeof(error_strings[0])))
+                           ? error_strings[error]
+                           : "Unknown error";
+
     snprintf(error_msg, sizeof(error_msg),
              "ERROR #%d: %s (Count: %lu)\r\n",
-             error, error_strings[error], error_count);
+             error, err_name, error_count);
     HAL_UART_Transmit(&huart3, (uint8_t*)error_msg, strlen(error_msg), 1000);
 
     // Blink LED pattern based on error code
@@ -875,9 +905,23 @@ void handleSystemError(SystemError_t error) {
         HAL_Delay(200);
     }
 
-    // Critical errors trigger emergency shutdown
-    if (error >= ERROR_RF_PA_OVERCURRENT && error <= ERROR_POWER_SUPPLY) {
-        DIAG_ERR("SYS", "CRITICAL ERROR (code %d: %s) -- initiating Emergency_Stop()", error, error_strings[error]);
+    // Critical errors trigger emergency shutdown.
+    //
+    // Safety-critical range: any fault that can damage the PAs or leave the
+    // system in an undefined state must cut the RF rails via Emergency_Stop().
+    // This covers:
+    //   ERROR_RF_PA_OVERCURRENT .. ERROR_POWER_SUPPLY (9..13) -- PA/supply faults
+    //   ERROR_TEMPERATURE_HIGH  (14) -- >75 C on the PA thermal sensors;
+    //                                  without cutting bias + 5V/5V5/RFPA rails
+    //                                  the GaN QPA2962 stage can thermal-runaway.
+    //   ERROR_WATCHDOG_TIMEOUT  (16) -- health-check loop has stalled (>60 s);
+    //                                  transmitter state is unknown, safest to
+    //                                  latch Emergency_Stop rather than rely on
+    //                                  IWDG reset (which re-energises the rails).
+    if ((error >= ERROR_RF_PA_OVERCURRENT && error <= ERROR_POWER_SUPPLY) ||
+        error == ERROR_TEMPERATURE_HIGH ||
+        error == ERROR_WATCHDOG_TIMEOUT) {
+        DIAG_ERR("SYS", "CRITICAL ERROR (code %d: %s) -- initiating Emergency_Stop()", error, err_name);
         snprintf(error_msg, sizeof(error_msg),
                  "CRITICAL ERROR! Initiating emergency shutdown.\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)error_msg, strlen(error_msg), 1000);
@@ -919,38 +963,41 @@ bool checkSystemHealthStatus(void) {
 // Get system status for GUI
 // Get system status for GUI with 8 temperature variables
 void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
-    char temp_buffer[200];
-    char final_status[500] = "System Status: ";
+    // Build status string directly in the output buffer using offset-tracked
+    // snprintf.  Each call returns the number of chars written (excluding NUL),
+    // so we advance 'off' and shrink 'rem' to guarantee we never overflow.
+    size_t off = 0;
+    size_t rem = buffer_size;
+    int w;
 
     // Basic status
     if (system_emergency_state) {
-        strcat(final_status, "EMERGENCY_STOP|");
+        w = snprintf(status_buffer + off, rem, "System Status: EMERGENCY_STOP|");
     } else {
-        strcat(final_status, "NORMAL|");
+        w = snprintf(status_buffer + off, rem, "System Status: NORMAL|");
     }
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
     // Error information
-    snprintf(temp_buffer, sizeof(temp_buffer), "LastError:%d|ErrorCount:%lu|",
-             last_error, error_count);
-    strcat(final_status, temp_buffer);
+    w = snprintf(status_buffer + off, rem, "LastError:%d|ErrorCount:%lu|",
+                 last_error, error_count);
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
     // Sensor status
-    snprintf(temp_buffer, sizeof(temp_buffer), "IMU:%.1f,%.1f,%.1f|GPS:%.6f,%.6f|ALT:%.1f|",
-             Pitch_Sensor, Roll_Sensor, Yaw_Sensor,
-             RADAR_Latitude, RADAR_Longitude, RADAR_Altitude);
-    strcat(final_status, temp_buffer);
+    w = snprintf(status_buffer + off, rem, "IMU:%.1f,%.1f,%.1f|GPS:%.6f,%.6f|ALT:%.1f|",
+                 Pitch_Sensor, Roll_Sensor, Yaw_Sensor,
+                 RADAR_Latitude, RADAR_Longitude, RADAR_Altitude);
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
     // LO Status
     bool tx_locked, rx_locked;
     ADF4382A_CheckLockStatus(&lo_manager, &tx_locked, &rx_locked);
-    snprintf(temp_buffer, sizeof(temp_buffer), "LO_TX:%s|LO_RX:%s|",
-             tx_locked ? "LOCKED" : "UNLOCKED",
-             rx_locked ? "LOCKED" : "UNLOCKED");
-    strcat(final_status, temp_buffer);
+    w = snprintf(status_buffer + off, rem, "LO_TX:%s|LO_RX:%s|",
+                 tx_locked ? "LOCKED" : "UNLOCKED",
+                 rx_locked ? "LOCKED" : "UNLOCKED");
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
     // Temperature readings (8 variables)
-    // You'll need to populate these temperature values from your sensors
-    // For now, I'll show how to format them - replace with actual temperature readings
     Temperature_1 = ADS7830_Measure_SingleEnded(&hadc3, 0);
     Temperature_2 = ADS7830_Measure_SingleEnded(&hadc3, 1);
     Temperature_3 = ADS7830_Measure_SingleEnded(&hadc3, 2);
@@ -961,11 +1008,11 @@ void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
     Temperature_8 = ADS7830_Measure_SingleEnded(&hadc3, 7);
 
     // Format all 8 temperature variables
-    snprintf(temp_buffer, sizeof(temp_buffer),
-             "T1:%.1f|T2:%.1f|T3:%.1f|T4:%.1f|T5:%.1f|T6:%.1f|T7:%.1f|T8:%.1f|",
-             Temperature_1, Temperature_2, Temperature_3, Temperature_4,
-             Temperature_5, Temperature_6, Temperature_7, Temperature_8);
-    strcat(final_status, temp_buffer);
+    w = snprintf(status_buffer + off, rem,
+                 "T1:%.1f|T2:%.1f|T3:%.1f|T4:%.1f|T5:%.1f|T6:%.1f|T7:%.1f|T8:%.1f|",
+                 Temperature_1, Temperature_2, Temperature_3, Temperature_4,
+                 Temperature_5, Temperature_6, Temperature_7, Temperature_8);
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
     // RF Power Amplifier status (if enabled)
     if (PowerAmplifier) {
@@ -975,18 +1022,17 @@ void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
         }
         avg_current /= 16.0f;
 
-        snprintf(temp_buffer, sizeof(temp_buffer), "PA_AvgCurrent:%.2f|PA_Enabled:%d|",
-                 avg_current, PowerAmplifier);
-        strcat(final_status, temp_buffer);
+        w = snprintf(status_buffer + off, rem, "PA_AvgCurrent:%.2f|PA_Enabled:%d|",
+                     avg_current, PowerAmplifier);
+        if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
     }
 
     // Radar operation status
-    snprintf(temp_buffer, sizeof(temp_buffer), "BeamPos:%d|Azimuth:%d|ChirpCount:%d|",
-             n, y, m);
-    strcat(final_status, temp_buffer);
+    w = snprintf(status_buffer + off, rem, "BeamPos:%d|Azimuth:%d|ChirpCount:%d|",
+                 n, y, m);
+    if (w > 0 && (size_t)w < rem) { off += (size_t)w; rem -= (size_t)w; }
 
-    // Copy to output buffer
-    strncpy(status_buffer, final_status, buffer_size - 1);
+    // NUL termination guaranteed by snprintf, but be safe
     status_buffer[buffer_size - 1] = '\0';
 }
 
@@ -1008,20 +1054,7 @@ static inline void delay_ms(uint32_t ms) { HAL_Delay(ms); }
 
 
 
-// This custom version of delay() ensures that the gps object
-// is being "fed".
-static void smartDelay(unsigned long ms)
-{
-    uint32_t start = HAL_GetTick();
-    uint8_t ch;
-
-    do {
-        // While there is new data available in UART (non-blocking)
-        if (HAL_UART_Receive(&huart5, &ch, 1, 0) == HAL_OK) {
-            gps.encode(ch);   // Pass received byte to TinyGPS++ equivalent parser
-        }
-    } while (HAL_GetTick() - start < ms);
-}
+// smartDelay removed -- replaced by non-blocking um982_process() in main loop
 
 // Small helper to enable DWT cycle counter for microdelay
 static void DWT_Init(void)
@@ -1165,7 +1198,14 @@ static int configure_ad9523(void)
 
     // init ad9523 defaults (fills any missing pdata defaults)
     DIAG("CLK", "Calling ad9523_init() -- fills pdata defaults");
-    ad9523_init(&init_param);
+    {
+        int32_t init_ret = ad9523_init(&init_param);
+        DIAG("CLK", "ad9523_init() returned %ld", (long)init_ret);
+        if (init_ret != 0) {
+            DIAG_ERR("CLK", "ad9523_init() FAILED (ret=%ld)", (long)init_ret);
+            return -1;
+        }
+    }
 
     /* [Bug #2 FIXED] Removed first ad9523_setup() call that was here.
      * It wrote to the chip while still in reset — writes were lost.
@@ -1554,6 +1594,12 @@ int main(void)
     Yaw_Sensor = (180*atan2(magRawY,magRawX)/PI) - Mag_Declination;
 
     if(Yaw_Sensor<0)Yaw_Sensor+=360;
+
+    // Override magnetometer heading with UM982 dual-antenna heading when available
+    if (um982_is_heading_valid(&um982)) {
+        Yaw_Sensor = um982_get_heading(&um982);
+    }
+
     RxEst_0 = RxEst_1;
     RyEst_0 = RyEst_1;
     RzEst_0 = RzEst_1;
@@ -1729,10 +1775,34 @@ int main(void)
   	//////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////GPS/////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////
-  for(int i=0; i<10;i++){
-  smartDelay(1000);
-  RADAR_Longitude = gps.location.lng();
-  RADAR_Latitude = gps.location.lat();
+  DIAG_SECTION("GPS INIT (UM982)");
+  DIAG("GPS", "Initializing UM982 on UART5 @ 115200 (baseline=50cm, tol=3cm)");
+  if (!um982_init(&um982, &huart5, 50.0f, 3.0f)) {
+      DIAG_WARN("GPS", "UM982 init: no VERSIONA response -- module may need more time");
+      // Not fatal: module may still start sending NMEA data after boot
+  } else {
+      DIAG("GPS", "UM982 init OK -- VERSIONA received");
+  }
+
+  // Collect GPS data for a few seconds (non-blocking pump)
+  DIAG("GPS", "Pumping GPS for 5 seconds to acquire initial fix...");
+  {
+      uint32_t gps_start = HAL_GetTick();
+      while (HAL_GetTick() - gps_start < 5000) {
+          um982_process(&um982);
+          HAL_Delay(10);
+      }
+  }
+  RADAR_Longitude = um982_get_longitude(&um982);
+  RADAR_Latitude = um982_get_latitude(&um982);
+  DIAG("GPS", "Initial position: lat=%.6f lon=%.6f fix=%d sats=%d",
+       RADAR_Latitude, RADAR_Longitude,
+       um982_get_fix_quality(&um982), um982_get_num_sats(&um982));
+
+  // Re-apply heading after GPS init so the north-alignment stepper move uses
+  // UM982 dual-antenna heading when available.
+  if (um982_is_heading_valid(&um982)) {
+      Yaw_Sensor = um982_get_heading(&um982);
   }
 
   //move Stepper to position 1 = 0°
@@ -1758,29 +1828,11 @@ int main(void)
       HAL_UART_Transmit(&huart3, (uint8_t*)gps_send_error, sizeof(gps_send_error) - 1, 1000);
   }
 
-  // Check if start flag was received and settings are ready
-  do{
-	  if (usbHandler.isStartFlagReceived() &&
-		  usbHandler.getState() == USBHandler::USBState::READY_FOR_DATA) {
-
-		  const RadarSettings& settings = usbHandler.getSettings();
-
-		  // Use the settings to configure your radar system
-		  /*
-			  settings.getSystemFrequency();
-			  settings.getChirpDuration1();
-			  settings.getChirpDuration2();
-			  settings.getChirpsPerPosition();
-			  settings.getFreqMin();
-			  settings.getFreqMax();
-			  settings.getPRF1();
-			  settings.getPRF2();
-			  settings.getMaxDistance();
-			  */
-
-
-              }
-  }while(!usbHandler.isStartFlagReceived());
+  /* [STM32-006 FIXED] Removed blocking do-while loop that waited for
+   * usbHandler.isStartFlagReceived().  The production V7 PyQt GUI does not
+   * send the legacy 4-byte start flag [23,46,158,237], so this loop hung
+   * the MCU at boot indefinitely.  The USB settings handshake (if ever
+   * re-enabled) should be handled non-blocking in the main loop. */
 
   /***************************************************************/
   /************RF Power Amplifier Powering up sequence************/
@@ -1995,15 +2047,28 @@ int main(void)
 	        HAL_UART_Transmit(&huart3, (uint8_t*)emergency_msg, strlen(emergency_msg), 1000);
 	        DIAG_ERR("SYS", "SAFE MODE ACTIVE -- blinking all LEDs, waiting for system_emergency_state clear");
 
-	        // Blink all LEDs to indicate safe mode
+	        // Blink all LEDs to indicate safe mode (500ms period, visible to operator)
 	        while (system_emergency_state) {
 	            HAL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);
 	            HAL_GPIO_TogglePin(LED_2_GPIO_Port, LED_2_Pin);
 	            HAL_GPIO_TogglePin(LED_3_GPIO_Port, LED_3_Pin);
 	            HAL_GPIO_TogglePin(LED_4_GPIO_Port, LED_4_Pin);
+	            HAL_Delay(250);
 	        }
 	        DIAG("SYS", "Exited safe mode blink loop -- system_emergency_state cleared");
 	    }
+
+	  //////////////////////////////////////////////////////////////////////////////////////
+	  ////////////////////////// GPS: Non-blocking NMEA processing ////////////////////////
+	  //////////////////////////////////////////////////////////////////////////////////////
+	  um982_process(&um982);
+
+	  // Update position globals continuously
+	  if (um982_is_position_valid(&um982)) {
+	      RADAR_Latitude = um982_get_latitude(&um982);
+	      RADAR_Longitude = um982_get_longitude(&um982);
+	  }
+
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  ////////////////////////// Monitor ADF4382A lock status periodically//////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
@@ -2113,6 +2178,31 @@ int main(void)
 	 //steering angle (rad)= arcsin(phase_dif/Pi)
 
       runRadarPulseSequence();
+
+      /* [AGC] Outer-loop AGC: sync enable from FPGA via DIG_6 (PD14),
+       * then read saturation flag (DIG_5 / PD13) and adjust ADAR1000 VGA
+       * common gain once per radar frame (~258 ms).
+       * FPGA register host_agc_enable is the single source of truth —
+       * DIG_6 propagates it to MCU every frame.
+       * 2-frame confirmation debounce: only change outerAgc.enabled when
+       * two consecutive frames read the same DIG_6 value. Prevents a
+       * single-sample glitch from causing a spurious AGC state transition.
+       * Added latency: 1 extra frame (~258 ms), acceptable for control plane. */
+      {
+          bool dig6_now = (HAL_GPIO_ReadPin(FPGA_DIG6_GPIO_Port,
+                                            FPGA_DIG6_Pin) == GPIO_PIN_SET);
+          static bool dig6_prev = false;  // matches boot default (AGC off)
+          if (dig6_now == dig6_prev) {
+              outerAgc.enabled = dig6_now;
+          }
+          dig6_prev = dig6_now;
+      }
+      if (outerAgc.enabled) {
+          bool sat = HAL_GPIO_ReadPin(FPGA_DIG5_SAT_GPIO_Port,
+                                      FPGA_DIG5_SAT_Pin) == GPIO_PIN_SET;
+          outerAgc.update(sat);
+          outerAgc.applyGain(adarManager);
+      }
 
       /* [GAP-3 FIX 2] Kick hardware watchdog — if we don't reach here within
        * ~4 s, the IWDG resets the MCU automatically. */
@@ -2544,7 +2634,7 @@ static void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 9600;
+  huart5.Init.BaudRate = 115200;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;

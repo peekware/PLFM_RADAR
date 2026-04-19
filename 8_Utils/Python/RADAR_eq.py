@@ -60,7 +60,7 @@ class RadarCalculatorGUI:
         
         scrollable_frame.bind(
             "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
@@ -83,7 +83,7 @@ class RadarCalculatorGUI:
         
         self.entries = {}
         
-        for i, (label, default) in enumerate(inputs):
+        for _i, (label, default) in enumerate(inputs):
             # Create a frame for each input row
             row_frame = ttk.Frame(scrollable_frame)
             row_frame.pack(fill=tk.X, pady=5)
@@ -119,8 +119,8 @@ class RadarCalculatorGUI:
         calculate_btn.pack()
         
         # Bind hover effect
-        calculate_btn.bind("<Enter>", lambda e: calculate_btn.config(bg='#45a049'))
-        calculate_btn.bind("<Leave>", lambda e: calculate_btn.config(bg='#4CAF50'))
+        calculate_btn.bind("<Enter>", lambda _e: calculate_btn.config(bg='#45a049'))
+        calculate_btn.bind("<Leave>", lambda _e: calculate_btn.config(bg='#4CAF50'))
         
     def create_results_display(self):
         """Create the results display area"""
@@ -137,7 +137,7 @@ class RadarCalculatorGUI:
         
         scrollable_frame.bind(
             "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
@@ -158,7 +158,7 @@ class RadarCalculatorGUI:
         
         self.results_labels = {}
         
-        for i, (label, key) in enumerate(results):
+        for _i, (label, key) in enumerate(results):
             # Create a frame for each result row
             row_frame = ttk.Frame(scrollable_frame)
             row_frame.pack(fill=tk.X, pady=10, padx=20)
@@ -180,10 +180,10 @@ class RadarCalculatorGUI:
         note_text = """
         NOTES:
         • Maximum detectable range is calculated using the radar equation
-        • Range resolution = c × τ / 2, where τ is pulse duration
-        • Maximum unambiguous range = c / (2 × PRF)
-        • Maximum detectable speed = λ × PRF / 4
-        • Speed resolution = λ × PRF / (2 × N) where N is number of pulses (assumed 1)
+        • Range resolution = c x τ / 2, where τ is pulse duration
+        • Maximum unambiguous range = c / (2 x PRF)
+        • Maximum detectable speed = λ x PRF / 4
+        • Speed resolution = λ x PRF / (2 x N) where N is number of pulses (assumed 1)
         • λ (wavelength) = c / f
         """
         
@@ -221,7 +221,10 @@ class RadarCalculatorGUI:
             temp = self.get_float_value(self.entries["Temperature (K):"])
             
             # Validate inputs
-            if None in [f_ghz, pulse_duration_us, prf, p_dbm, g_dbi, sens_dbm, rcs, losses_db, nf_db, temp]:
+            if None in [
+                f_ghz, pulse_duration_us, prf, p_dbm, g_dbi,
+                sens_dbm, rcs, losses_db, nf_db, temp,
+            ]:
                 messagebox.showerror("Error", "Please enter valid numeric values for all fields")
                 return
                 
@@ -235,7 +238,7 @@ class RadarCalculatorGUI:
             g_linear = 10 ** (g_dbi / 10)
             sens_linear = 10 ** ((sens_dbm - 30) / 10)
             losses_linear = 10 ** (losses_db / 10)
-            nf_linear = 10 ** (nf_db / 10)
+            _nf_linear = 10 ** (nf_db / 10)
             
             # Calculate receiver noise power
             if k is None:
@@ -297,12 +300,15 @@ class RadarCalculatorGUI:
             # Show success message
             messagebox.showinfo("Success", "Calculation completed successfully!")
             
-        except Exception as e:
-            messagebox.showerror("Calculation Error", f"An error occurred during calculation:\n{str(e)}")
+        except (ValueError, ZeroDivisionError) as e:
+            messagebox.showerror(
+                "Calculation Error",
+                f"An error occurred during calculation:\n{e!s}",
+            )
             
 def main():
     root = tk.Tk()
-    app = RadarCalculatorGUI(root)
+    _app = RadarCalculatorGUI(root)
     root.mainloop()
 
 if __name__ == "__main__":

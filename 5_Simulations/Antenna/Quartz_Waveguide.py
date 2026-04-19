@@ -91,9 +91,9 @@ z_edges = np.concatenate([z_centers - slot_L/2.0, z_centers + slot_L/2.0])
 # -------------------------
 # Mesh lines — EXPLICIT (no GetLine calls)
 # -------------------------
-x_lines = sorted(set([x_min, -t_metal, 0.0, a, a+t_metal, x_max] + list(x_edges)))
+x_lines = sorted({x_min, -t_metal, 0.0, a, a + t_metal, x_max, *list(x_edges)})
 y_lines = [y_min, 0.0, b, b+t_metal, y_max]
-z_lines = sorted(set([z_min, 0.0, L, z_max] + list(z_edges)))
+z_lines = sorted({z_min, 0.0, L, z_max, *list(z_edges)})
 
 mesh.AddLine('x', x_lines)
 mesh.AddLine('y', y_lines)
@@ -106,7 +106,8 @@ mesh.SmoothMeshLines('all', mesh_res, ratio=1.4)
 # Materials
 # -------------------------
 pec    = CSX.AddMetal('PEC')
-quartz = CSX.AddMaterial('QUARTZ'); quartz.SetMaterialProperty(epsilon=er_quartz)
+quartz = CSX.AddMaterial('QUARTZ')
+quartz.SetMaterialProperty(epsilon=er_quartz)
 air    = CSX.AddMaterial('AIR')     # explicit for slot holes
 
 # -------------------------
@@ -122,7 +123,7 @@ pec.AddBox([-t_metal,-t_metal,0],[a+t_metal,0,       L])          # bottom
 pec.AddBox([-t_metal, b, 0],     [a+t_metal,b+t_metal,L])         # top
 
 # Slots = AIR boxes overriding the top metal
-for zc, xc in zip(z_centers, x_centers):
+for zc, xc in zip(z_centers, x_centers, strict=False):
     x1, x2 = xc - slot_w/2.0, xc + slot_w/2.0
     z1, z2 = zc - slot_L/2.0, zc + slot_L/2.0
     prim = air.AddBox([x1, b, z1], [x2, b+t_metal, z2])
@@ -180,7 +181,7 @@ if simulate:
 # Post-processing: S-params & impedance
 # -------------------------
 freq = np.linspace(f_start, f_stop, 401)
-ports = [p for p in FDTD.ports]   # Port 1 & Port 2 in creation order
+ports = list(FDTD.ports)   # Port 1 & Port 2 in creation order
 for p in ports:
     p.CalcPort(Sim_Path, freq)
 
@@ -191,13 +192,19 @@ Zin = ports[0].uf_tot / ports[0].if_tot
 plt.figure(figsize=(7.6,4.6))
 plt.plot(freq*1e-9, 20*np.log10(np.abs(S11)), lw=2, label='|S11|')
 plt.plot(freq*1e-9, 20*np.log10(np.abs(S21)), lw=2, ls='--', label='|S21|')
-plt.grid(True); plt.legend(); plt.xlabel('Frequency (GHz)'); plt.ylabel('Magnitude (dB)')
+plt.grid(True)
+plt.legend()
+plt.xlabel('Frequency (GHz)')
+plt.ylabel('Magnitude (dB)')
 plt.title('S-Parameters: Slotted Quartz-Filled WG')
 
 plt.figure(figsize=(7.6,4.6))
 plt.plot(freq*1e-9, np.real(Zin), lw=2, label='Re{Zin}')
 plt.plot(freq*1e-9, np.imag(Zin), lw=2, ls='--', label='Im{Zin}')
-plt.grid(True); plt.legend(); plt.xlabel('Frequency (GHz)'); plt.ylabel('Ohms')
+plt.grid(True)
+plt.legend()
+plt.xlabel('Frequency (GHz)')
+plt.ylabel('Ohms')
 plt.title('Input Impedance (Port 1)')
 
 # -------------------------
@@ -219,9 +226,6 @@ mismatch = 1.0 - np.abs(S11[idx_f0])**2   # (1 - |S11|^2)
 Gmax_lin = Dmax_lin * float(mismatch)
 Gmax_dBi = 10*np.log10(Gmax_lin)
 
-print(f"Max directivity @ {f0/1e9:.3f} GHz: {10*np.log10(Dmax_lin):.2f} dBi")
-print(f"Mismatch term  (1-|S11|^2)        : {float(mismatch):.3f}")
-print(f"Estimated max realized gain       : {Gmax_dBi:.2f} dBi")
 
 # 3D normalized pattern
 E = np.squeeze(res.E_norm)     # shape [f, th, ph] -> [th, ph]
@@ -237,19 +241,26 @@ ax = fig.add_subplot(111, projection='3d')
 ax.plot_surface(X, Y, Z, rstride=2, cstride=2, linewidth=0, antialiased=True, alpha=0.92)
 ax.set_title(f'Normalized 3D Pattern @ {f0/1e9:.2f} GHz\n(peak ≈ {Gmax_dBi:.1f} dBi)')
 ax.set_box_aspect((1,1,1))
-ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
 plt.tight_layout()
 
 # Quick 2D geometry preview (top view at y=b)
 plt.figure(figsize=(8.4,2.8))
-plt.fill_between([0,a], [0,0], [L,L], color='#dddddd', alpha=0.5, step='pre', label='WG aperture (top)')
-for zc, xc in zip(z_centers, x_centers):
+plt.fill_between(
+    [0, a], [0, 0], [L, L], color='#dddddd', alpha=0.5, step='pre', label='WG aperture (top)'
+)
+for zc, xc in zip(z_centers, x_centers, strict=False):
     plt.gca().add_patch(plt.Rectangle((xc - slot_w/2.0, zc - slot_L/2.0),
                                       slot_w, slot_L, fc='#3355ff', ec='k'))
-plt.xlim(-2, a+2); plt.ylim(-5, L+5)
+plt.xlim(-2, a + 2)
+plt.ylim(-5, L + 5)
 plt.gca().invert_yaxis()
-plt.xlabel('x (mm)'); plt.ylabel('z (mm)')
+plt.xlabel('x (mm)')
+plt.ylabel('z (mm)')
 plt.title('Top-view slot layout (y=b plane)')
-plt.grid(True); plt.legend()
+plt.grid(True)
+plt.legend()
 
 plt.show()

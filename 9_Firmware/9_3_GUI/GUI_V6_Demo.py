@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+
+# =============================================================================
+# DEPRECATED: GUI V6 Demo is superseded by GUI_V65_Tk and V7.
+# This file is retained for reference only. Do not use for new development.
+# Removal planned for next major release.
+# =============================================================================
 
 """
 Radar System GUI - Fully Functional Demo Version
@@ -8,8 +13,6 @@ All buttons work, simulated radar data is generated in real-time
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading
-import queue
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,10 +20,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import logging
 from dataclasses import dataclass
-from typing import List, Dict, Optional
 import random
 import json
-import os
 from datetime import datetime
 
 # Configure logging
@@ -68,7 +69,7 @@ class SimulatedRadarProcessor:
         self.noise_floor = 10
         self.clutter_level = 5
         
-    def _create_targets(self) -> List[Dict]:
+    def _create_targets(self) -> list[dict]:
         """Create moving targets"""
         return [
             {
@@ -213,22 +214,20 @@ class SimulatedRadarProcessor:
         
         return rd_map
     
-    def _detect_targets(self) -> List[RadarTarget]:
+    def _detect_targets(self) -> list[RadarTarget]:
         """Detect targets from current state"""
-        detected = []
-        for t in self.targets:
-            # Random detection based on SNR
-            if random.random() < (t['snr'] / 35):
-                # Add some measurement noise
-                detected.append(RadarTarget(
-                    id=t['id'],
-                    range=t['range'] + random.gauss(0, 10),
-                    velocity=t['velocity'] + random.gauss(0, 2),
-                    azimuth=t['azimuth'] + random.gauss(0, 1),
-                    elevation=t['elevation'] + random.gauss(0, 0.5),
-                    snr=t['snr'] + random.gauss(0, 2)
-                ))
-        return detected
+        return [
+            RadarTarget(
+                id=t['id'],
+                range=t['range'] + random.gauss(0, 10),
+                velocity=t['velocity'] + random.gauss(0, 2),
+                azimuth=t['azimuth'] + random.gauss(0, 1),
+                elevation=t['elevation'] + random.gauss(0, 0.5),
+                snr=t['snr'] + random.gauss(0, 2)
+            )
+            for t in self.targets
+            if random.random() < (t['snr'] / 35)
+        ]
 
 # ============================================================================
 # MAIN GUI APPLICATION
@@ -569,7 +568,7 @@ class RadarDemoGUI:
         
         scrollable_frame.bind(
             "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
@@ -589,7 +588,7 @@ class RadarDemoGUI:
             ('CFAR Threshold (dB):', 'cfar', 13.0, 5.0, 30.0)
         ]
         
-        for i, (label, key, default, minv, maxv) in enumerate(settings):
+        for _i, (label, key, default, minv, maxv) in enumerate(settings):
             frame = ttk.Frame(scrollable_frame)
             frame.pack(fill='x', padx=10, pady=5)
             
@@ -624,7 +623,9 @@ class RadarDemoGUI:
         self.update_rate.grid(row=0, column=1, padx=10, pady=5)
         self.update_rate_value = ttk.Label(frame, text="20")
         self.update_rate_value.grid(row=0, column=2, sticky='w')
-        self.update_rate.configure(command=lambda v: self.update_rate_value.config(text=f"{float(v):.0f}"))
+        self.update_rate.configure(
+            command=lambda v: self.update_rate_value.config(text=f"{float(v):.0f}")
+        )
         
         # Color map
         ttk.Label(frame, text="Color Map:").grid(row=1, column=0, sticky='w', pady=5)
@@ -661,7 +662,9 @@ class RadarDemoGUI:
         self.noise_floor.grid(row=0, column=1, padx=10, pady=5)
         self.noise_value = ttk.Label(frame, text="10")
         self.noise_value.grid(row=0, column=2, sticky='w')
-        self.noise_floor.configure(command=lambda v: self.noise_value.config(text=f"{float(v):.1f}"))
+        self.noise_floor.configure(
+            command=lambda v: self.noise_value.config(text=f"{float(v):.1f}")
+        )
         
         # Clutter level
         ttk.Label(frame, text="Clutter Level:").grid(row=1, column=0, sticky='w', pady=5)
@@ -671,7 +674,9 @@ class RadarDemoGUI:
         self.clutter_level.grid(row=1, column=1, padx=10, pady=5)
         self.clutter_value = ttk.Label(frame, text="5")
         self.clutter_value.grid(row=1, column=2, sticky='w')
-        self.clutter_level.configure(command=lambda v: self.clutter_value.config(text=f"{float(v):.1f}"))
+        self.clutter_level.configure(
+            command=lambda v: self.clutter_value.config(text=f"{float(v):.1f}")
+        )
         
         # Number of targets
         ttk.Label(frame, text="Number of Targets:").grid(row=2, column=0, sticky='w', pady=5)
@@ -681,7 +686,9 @@ class RadarDemoGUI:
         self.num_targets.grid(row=2, column=1, padx=10, pady=5)
         self.targets_value = ttk.Label(frame, text="5")
         self.targets_value.grid(row=2, column=2, sticky='w')
-        self.num_targets.configure(command=lambda v: self.targets_value.config(text=f"{float(v):.0f}"))
+        self.num_targets.configure(
+            command=lambda v: self.targets_value.config(text=f"{float(v):.0f}")
+        )
         
         # Reset button
         ttk.Button(frame, text="Reset Simulation", 
@@ -740,7 +747,7 @@ class RadarDemoGUI:
             # Update time
             self.time_label.config(text=time.strftime("%H:%M:%S"))
             
-        except Exception as e:
+        except (ValueError, IndexError) as e:
             logger.error(f"Animation error: {e}")
         
         # Schedule next update
@@ -935,7 +942,7 @@ class RadarDemoGUI:
             messagebox.showinfo("Success", "Settings applied")
             logger.info("Settings updated")
             
-        except Exception as e:
+        except (ValueError, tk.TclError) as e:
             messagebox.showerror("Error", f"Invalid settings: {e}")
     
     def apply_display_settings(self):
@@ -976,7 +983,7 @@ class RadarDemoGUI:
         )
         if filename:
             try:
-                with open(filename, 'r') as f:
+                with open(filename) as f:
                     config = json.load(f)
                 
                 # Apply settings
@@ -999,7 +1006,7 @@ class RadarDemoGUI:
                 messagebox.showinfo("Success", f"Loaded configuration from {filename}")
                 logger.info(f"Configuration loaded from {filename}")
                 
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, ValueError, tk.TclError) as e:
                 messagebox.showerror("Error", f"Failed to load: {e}")
     
     def save_config(self):
@@ -1026,7 +1033,7 @@ class RadarDemoGUI:
                 messagebox.showinfo("Success", f"Saved configuration to {filename}")
                 logger.info(f"Configuration saved to {filename}")
                 
-            except Exception as e:
+            except (OSError, TypeError, ValueError) as e:
                 messagebox.showerror("Error", f"Failed to save: {e}")
     
     def export_data(self):
@@ -1056,7 +1063,7 @@ class RadarDemoGUI:
                 messagebox.showinfo("Success", f"Exported {len(frames)} frames to {filename}")
                 logger.info(f"Data exported to {filename}")
                 
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 messagebox.showerror("Error", f"Failed to export: {e}")
     
     def show_calibration(self):
@@ -1200,7 +1207,7 @@ def main():
         root = tk.Tk()
         
         # Create application
-        app = RadarDemoGUI(root)
+        _app = RadarDemoGUI(root)  # keeps reference alive
         
         # Center window
         root.update_idletasks()
@@ -1213,7 +1220,7 @@ def main():
         # Start main loop
         root.mainloop()
         
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Fatal error: {e}")
         messagebox.showerror("Fatal Error", f"Application failed to start:\n{e}")
 

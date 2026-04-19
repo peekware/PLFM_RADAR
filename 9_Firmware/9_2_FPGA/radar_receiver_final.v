@@ -11,8 +11,10 @@ module radar_receiver_final (
     input wire adc_dco_n,            // Data Clock Output N (400MHz LVDS)
 	 output wire adc_pwdn,
     
-    // Chirp counter from transmitter (for frame sync and matched filter)
+    // Chirp counter from transmitter (for matched filter indexing)
     input wire [5:0] chirp_counter,
+    // Frame-start pulse from transmitter (CDC-synchronized, 1 clk_100m cycle)
+    input wire tx_frame_start,
     
     output wire [31:0] doppler_output,
     output wire doppler_valid,
@@ -42,6 +44,13 @@ module radar_receiver_final (
     // [2:0]=shift amount: 0..7 bits. Default 0 = pass-through.
     input wire [3:0] host_gain_shift,
 
+    // AGC configuration (opcodes 0x28-0x2C, active only when agc_enable=1)
+    input wire        host_agc_enable,      // 0x28: 0=manual, 1=auto AGC
+    input wire [7:0]  host_agc_target,      // 0x29: target peak magnitude
+    input wire [3:0]  host_agc_attack,      // 0x2A: gain-down step on clipping
+    input wire [3:0]  host_agc_decay,       // 0x2B: gain-up step when weak
+    input wire [3:0]  host_agc_holdoff,     // 0x2C: frames before gain-up
+
     // STM32 toggle signals for mode 00 (STM32-driven) pass-through.
     // These are CDC-synchronized in radar_system_top.v / radar_transmitter.v
     // before reaching this module. In mode 00, the RX mode controller uses
@@ -60,7 +69,12 @@ module radar_receiver_final (
     // ADC raw data tap (clk_100m domain, post-DDC, for self-test / debug)
     output wire [15:0] dbg_adc_i,            // DDC output I (16-bit signed, 100 MHz)
     output wire [15:0] dbg_adc_q,            // DDC output Q (16-bit signed, 100 MHz)
-    output wire        dbg_adc_valid         // DDC output valid (100 MHz)
+    output wire        dbg_adc_valid,        // DDC output valid (100 MHz)
+
+    // AGC status outputs (for status readback / STM32 outer loop)
+    output wire [7:0]  agc_saturation_count, // Per-frame clipped sample count
+    output wire [7:0]  agc_peak_magnitude,   // Per-frame peak (upper 8 bits)
+    output wire [3:0]  agc_current_gain      // Effective gain_shift encoding
 );
 
 // ========== INTERNAL SIGNALS ==========
@@ -86,7 +100,9 @@ wire adc_valid_sync;
 // Gain-controlled signals (between DDC output and matched filter)
 wire signed [15:0] gc_i, gc_q;
 wire gc_valid;
-wire [7:0] gc_saturation_count;  // Diagnostic: clipped sample counter
+wire [7:0] gc_saturation_count;  // Diagnostic: per-frame clipped sample counter
+wire [7:0] gc_peak_magnitude;    // Diagnostic: per-frame peak magnitude
+wire [3:0] gc_current_gain;      // Diagnostic: effective gain_shift
 
 // Reference signals for the processing chain
 wire [15:0] long_chirp_real, long_chirp_imag;
@@ -160,7 +176,7 @@ wire clk_400m;
 // the buffered 400MHz DCO clock via adc_dco_bufg, avoiding duplicate
 // IBUFDS instantiations on the same LVDS clock pair.
 
-// 1. ADC + CDC + AGC
+// 1. ADC + CDC + Digital Gain
 
 // CMOS Output Interface (400MHz Domain)
 wire [7:0] adc_data_cmos;  // 8-bit ADC data (CMOS, from ad9484_interface_400m)
@@ -222,9 +238,10 @@ ddc_input_interface ddc_if (
     .data_sync_error()
 );
 
-// 2b. Digital Gain Control (Fix 3)
+// 2b. Digital Gain Control with AGC
 // Host-configurable power-of-2 shift between DDC output and matched filter.
-// Default gain_shift=0 → pass-through (no behavioral change from baseline).
+// Default gain_shift=0, agc_enable=0 → pass-through (no behavioral change).
+// When agc_enable=1: auto-adjusts gain per frame based on peak/saturation.
 rx_gain_control gain_ctrl (
     .clk(clk),
     .reset_n(reset_n),
@@ -232,10 +249,21 @@ rx_gain_control gain_ctrl (
     .data_q_in(adc_q_scaled),
     .valid_in(adc_valid_sync),
     .gain_shift(host_gain_shift),
+    // AGC configuration
+    .agc_enable(host_agc_enable),
+    .agc_target(host_agc_target),
+    .agc_attack(host_agc_attack),
+    .agc_decay(host_agc_decay),
+    .agc_holdoff(host_agc_holdoff),
+    // Frame boundary from Doppler processor
+    .frame_boundary(doppler_frame_done),
+    // Outputs
     .data_i_out(gc_i),
     .data_q_out(gc_q),
     .valid_out(gc_valid),
-    .saturation_count(gc_saturation_count)
+    .saturation_count(gc_saturation_count),
+    .peak_magnitude(gc_peak_magnitude),
+    .current_gain(gc_current_gain)
 );
 
 // 3. Dual Chirp Memory Loader
@@ -366,32 +394,31 @@ mti_canceller #(
     .mti_first_chirp(mti_first_chirp)
 );
 
-// ========== FRAME SYNC USING chirp_counter ==========
-reg [5:0] chirp_counter_prev;
+// ========== FRAME SYNC FROM TRANSMITTER ==========
+// [FPGA-001 FIXED] Use the authoritative new_chirp_frame signal from the
+// transmitter (via plfm_chirp_controller_enhanced), CDC-synchronized to
+// clk_100m in radar_system_top.  Previous code tried to derive frame
+// boundaries from chirp_counter == 0, but that counter comes from the
+// transmitter path (plfm_chirp_controller_enhanced) which does NOT wrap
+// at chirps_per_elev — it overflows to N and only wraps at 6-bit rollover
+// (64).  This caused frame pulses at half the expected rate for N=32.
+reg tx_frame_start_prev;
 reg new_frame_pulse;
 
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
-        chirp_counter_prev <= 6'd0;
+        tx_frame_start_prev <= 1'b0;
         new_frame_pulse <= 1'b0;
     end else begin
-        // Default: no pulse
         new_frame_pulse <= 1'b0;
         
-        // Dynamic frame detection using host_chirps_per_elev.
-        // Detect frame boundary when chirp_counter changes AND is a
-        // multiple of host_chirps_per_elev (0, N, 2N, 3N, ...).
-        // Uses a modulo counter that resets at host_chirps_per_elev.
-        if (chirp_counter != chirp_counter_prev) begin
-            if (chirp_counter == 6'd0 ||
-                chirp_counter == host_chirps_per_elev ||
-                chirp_counter == {host_chirps_per_elev, 1'b0}) begin
-                new_frame_pulse <= 1'b1;
-            end
+        // Edge detect: tx_frame_start is a toggle-CDC derived pulse that
+        // may be 1 clock wide.  Capture rising edge for clean 1-cycle pulse.
+        if (tx_frame_start && !tx_frame_start_prev) begin
+            new_frame_pulse <= 1'b1;
         end
         
-        // Store previous value
-        chirp_counter_prev <= chirp_counter;
+        tx_frame_start_prev <= tx_frame_start;
     end
 end
 
@@ -457,14 +484,6 @@ always @(posedge clk or negedge reset_n) begin
             `endif
             chirps_in_current_frame <= 0;
         end
-        
-        // Monitor chirp counter pattern
-        if (chirp_counter != chirp_counter_prev) begin
-            `ifdef SIMULATION
-            $display("[TOP] chirp_counter: %0d ? %0d", 
-                     chirp_counter_prev, chirp_counter);
-            `endif
-        end
     end
 end
 
@@ -473,5 +492,10 @@ end
 assign dbg_adc_i     = adc_i_scaled;
 assign dbg_adc_q     = adc_q_scaled;
 assign dbg_adc_valid = adc_valid_sync;
+
+// ========== AGC STATUS OUTPUTS ==========
+assign agc_saturation_count = gc_saturation_count;
+assign agc_peak_magnitude   = gc_peak_magnitude;
+assign agc_current_gain     = gc_current_gain;
 
 endmodule

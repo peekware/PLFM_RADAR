@@ -34,22 +34,25 @@ static void Mock_Emergency_Stop(void)
     state_was_true_when_estop_called = system_emergency_state;
 }
 
-/* Error codes (subset matching main.cpp) */
+/* Error codes (subset matching main.cpp SystemError_t) */
 typedef enum {
     ERROR_NONE = 0,
     ERROR_RF_PA_OVERCURRENT = 9,
     ERROR_RF_PA_BIAS = 10,
-    ERROR_STEPPER_FAULT = 11,
+    ERROR_STEPPER_MOTOR = 11,
     ERROR_FPGA_COMM = 12,
     ERROR_POWER_SUPPLY = 13,
     ERROR_TEMPERATURE_HIGH = 14,
+    ERROR_MEMORY_ALLOC = 15,
+    ERROR_WATCHDOG_TIMEOUT = 16,
 } SystemError_t;
 
-/* Extracted critical-error handling logic (post-fix ordering) */
+/* Extracted critical-error handling logic (matches post-fix main.cpp predicate) */
 static void simulate_handleSystemError_critical(SystemError_t error)
 {
-    /* Only critical errors (PA overcurrent through power supply) trigger e-stop */
-    if (error >= ERROR_RF_PA_OVERCURRENT && error <= ERROR_POWER_SUPPLY) {
+    if ((error >= ERROR_RF_PA_OVERCURRENT && error <= ERROR_POWER_SUPPLY) ||
+        error == ERROR_TEMPERATURE_HIGH ||
+        error == ERROR_WATCHDOG_TIMEOUT) {
         /* FIX 5: set flag BEFORE calling Emergency_Stop */
         system_emergency_state = true;
         Mock_Emergency_Stop();
@@ -93,17 +96,39 @@ int main(void)
     assert(state_was_true_when_estop_called == true);
     printf("PASS\n");
 
-    /* Test 4: Non-critical error → no e-stop, flag stays false */
-    printf("  Test 4: Non-critical error (no e-stop)... ");
+    /* Test 4: Overtemp → MUST trigger e-stop (was incorrectly non-critical before fix) */
+    printf("  Test 4: Overtemp triggers e-stop... ");
     system_emergency_state = false;
     emergency_stop_called = false;
+    state_was_true_when_estop_called = false;
     simulate_handleSystemError_critical(ERROR_TEMPERATURE_HIGH);
+    assert(emergency_stop_called == true);
+    assert(system_emergency_state == true);
+    assert(state_was_true_when_estop_called == true);
+    printf("PASS\n");
+
+    /* Test 5: Watchdog timeout → MUST trigger e-stop */
+    printf("  Test 5: Watchdog timeout triggers e-stop... ");
+    system_emergency_state = false;
+    emergency_stop_called = false;
+    state_was_true_when_estop_called = false;
+    simulate_handleSystemError_critical(ERROR_WATCHDOG_TIMEOUT);
+    assert(emergency_stop_called == true);
+    assert(system_emergency_state == true);
+    assert(state_was_true_when_estop_called == true);
+    printf("PASS\n");
+
+    /* Test 6: Non-critical error (memory alloc) → no e-stop */
+    printf("  Test 6: Non-critical error (no e-stop)... ");
+    system_emergency_state = false;
+    emergency_stop_called = false;
+    simulate_handleSystemError_critical(ERROR_MEMORY_ALLOC);
     assert(emergency_stop_called == false);
     assert(system_emergency_state == false);
     printf("PASS\n");
 
-    /* Test 5: ERROR_NONE → no e-stop */
-    printf("  Test 5: ERROR_NONE (no action)... ");
+    /* Test 7: ERROR_NONE → no e-stop */
+    printf("  Test 7: ERROR_NONE (no action)... ");
     system_emergency_state = false;
     emergency_stop_called = false;
     simulate_handleSystemError_critical(ERROR_NONE);
@@ -111,6 +136,6 @@ int main(void)
     assert(system_emergency_state == false);
     printf("PASS\n");
 
-    printf("\n=== Gap-3 Fix 5: ALL TESTS PASSED ===\n\n");
+    printf("\n=== Gap-3 Fix 5: ALL 7 TESTS PASSED ===\n\n");
     return 0;
 }

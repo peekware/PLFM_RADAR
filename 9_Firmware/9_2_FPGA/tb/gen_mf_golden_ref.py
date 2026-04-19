@@ -28,8 +28,7 @@ N = 1024  # FFT length
 def to_q15(value):
     """Clamp a floating-point value to 16-bit signed range [-32768, 32767]."""
     v = int(np.round(value))
-    v = max(-32768, min(32767, v))
-    return v
+    return max(-32768, min(32767, v))
 
 
 def to_hex16(value):
@@ -91,7 +90,7 @@ def generate_case(case_num, sig_i, sig_q, ref_i, ref_q, description, outdir):
     peak_q_q = out_q_q[peak_bin]
 
     # Write hex files
-    prefix = os.path.join(outdir, f"mf_golden")
+    prefix = os.path.join(outdir, "mf_golden")
     write_hex_file(f"{prefix}_sig_i_case{case_num}.hex", sig_i)
     write_hex_file(f"{prefix}_sig_q_case{case_num}.hex", sig_q)
     write_hex_file(f"{prefix}_ref_i_case{case_num}.hex", ref_i)
@@ -108,7 +107,7 @@ def generate_case(case_num, sig_i, sig_q, ref_i, ref_q, description, outdir):
         f"mf_golden_out_q_case{case_num}.hex",
     ]
 
-    summary = {
+    return {
         "case": case_num,
         "description": description,
         "peak_bin": peak_bin,
@@ -119,7 +118,6 @@ def generate_case(case_num, sig_i, sig_q, ref_i, ref_q, description, outdir):
         "peak_q_quant": peak_q_q,
         "files": files,
     }
-    return summary
 
 
 def main():
@@ -149,7 +147,6 @@ def main():
     # =========================================================================
     # Case 2: Tone autocorrelation at bin 5
     # Signal and reference: complex tone at bin 5, amplitude 8000 (Q15)
-    # sig[n] = 8000 * exp(j * 2*pi*5*n/N)
     # Autocorrelation of a tone => peak at bin 0 (lag 0)
     # =========================================================================
     amp = 8000.0
@@ -233,7 +230,7 @@ def main():
             f.write(f"  Peak Q (float):        {s['peak_q_float']:.6f}\n")
             f.write(f"  Peak I (quantized):    {s['peak_i_quant']}\n")
             f.write(f"  Peak Q (quantized):    {s['peak_q_quant']}\n")
-            f.write(f"  Files:\n")
+            f.write("  Files:\n")
             for fname in s["files"]:
                 f.write(f"    {fname}\n")
             f.write("\n")
@@ -243,28 +240,12 @@ def main():
     # =========================================================================
     # Print summary to stdout
     # =========================================================================
-    print("=" * 72)
-    print("Matched Filter Golden Reference Generator")
-    print(f"Output directory: {outdir}")
-    print(f"FFT length: {N}")
-    print("=" * 72)
 
-    for s in summaries:
-        print()
-        print(f"Case {s['case']}: {s['description']}")
-        print(f"  Peak bin:              {s['peak_bin']}")
-        print(f"  Peak magnitude (float):{s['peak_mag_float']:.6f}")
-        print(f"  Peak I (float):        {s['peak_i_float']:.6f}")
-        print(f"  Peak Q (float):        {s['peak_q_float']:.6f}")
-        print(f"  Peak I (quantized):    {s['peak_i_quant']}")
-        print(f"  Peak Q (quantized):    {s['peak_q_quant']}")
+    for _ in summaries:
+        pass
 
-    print()
-    print(f"Generated {len(all_files)} files:")
-    for fname in all_files:
-        print(f"  {fname}")
-    print()
-    print("Done.")
+    for _ in all_files:
+        pass
 
 
 if __name__ == "__main__":
