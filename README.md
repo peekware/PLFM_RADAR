@@ -27,3 +27,9 @@
 
 - Donanım: CERN-OHL-P v2
 - Yazılım: MIT
+
+---
+
+## İletişim
+
+Discord: [https://discord.gg/vU7PNVr8vk](https://discord.gg/vU7PNVr8vk)
